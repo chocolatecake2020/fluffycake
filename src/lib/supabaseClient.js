@@ -11,8 +11,7 @@ export const supabase = hasSupabaseConfig
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
-        storageKey: "vetbridge-auth-token",
-        multiTab: false
+        storageKey: "vetbridge-auth-token"
       }
     })
   : null;
