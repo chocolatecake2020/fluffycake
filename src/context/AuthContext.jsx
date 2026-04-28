@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { hasSupabaseConfig, supabase } from "../lib/supabaseClient";
 
 const AuthContext = createContext(null);
+const ACTIVE_ACCOUNT_EMAIL_KEY = "vetbridge-active-account-email";
 const adminEmailWhitelist = (import.meta.env.VITE_ADMIN_EMAIL_WHITELIST || "")
   .split(",")
   .map((value) => value.trim().toLowerCase())
@@ -10,6 +11,27 @@ const forcedAdminEmails = new Set([...adminEmailWhitelist, "ksdolphin@naver.com"
 
 function isForcedAdminEmail(email) {
   return forcedAdminEmails.has((email || "").trim().toLowerCase());
+}
+
+function readActiveAccountEmail() {
+  try {
+    return (window.localStorage.getItem(ACTIVE_ACCOUNT_EMAIL_KEY) || "").trim().toLowerCase();
+  } catch (_error) {
+    return "";
+  }
+}
+
+function writeActiveAccountEmail(email) {
+  try {
+    const normalized = (email || "").trim().toLowerCase();
+    if (!normalized) {
+      window.localStorage.removeItem(ACTIVE_ACCOUNT_EMAIL_KEY);
+      return;
+    }
+    window.localStorage.setItem(ACTIVE_ACCOUNT_EMAIL_KEY, normalized);
+  } catch (_error) {
+    // Ignore storage failures in private/locked-down browser mode.
+  }
 }
 
 async function getProfile(userId) {
@@ -74,14 +96,22 @@ function AuthProvider({ children }) {
       .getSession()
       .then(async ({ data }) => {
         if (!mounted) return;
-        const nextSession = data.session ?? null;
+        let nextSession = data.session ?? null;
+        const expectedEmail = readActiveAccountEmail();
+        const sessionEmail = (nextSession?.user?.email || "").trim().toLowerCase();
+        if (nextSession?.user && expectedEmail && sessionEmail && sessionEmail !== expectedEmail) {
+          await supabase.auth.signOut({ scope: "local" });
+          nextSession = null;
+        }
         setSession(nextSession);
         if (nextSession?.user?.id) {
-          let userProfile = await getProfile(data.session.user.id);
-          if (!userProfile) userProfile = await upsertProfileFromUser(data.session.user);
-          userProfile = await ensureAdminProfile(data.session.user, userProfile);
+          writeActiveAccountEmail(nextSession.user.email);
+          let userProfile = await getProfile(nextSession.user.id);
+          if (!userProfile) userProfile = await upsertProfileFromUser(nextSession.user);
+          userProfile = await ensureAdminProfile(nextSession.user, userProfile);
           if (mounted) setProfile(userProfile);
         } else {
+          writeActiveAccountEmail("");
           if (mounted) setProfile(null);
         }
       })
@@ -96,13 +126,24 @@ function AuthProvider({ children }) {
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
       try {
+        const expectedEmail = readActiveAccountEmail();
+        const sessionEmail = (nextSession?.user?.email || "").trim().toLowerCase();
+        if (nextSession?.user && expectedEmail && sessionEmail && sessionEmail !== expectedEmail) {
+          await supabase.auth.signOut({ scope: "local" });
+          setSession(null);
+          setProfile(null);
+          writeActiveAccountEmail("");
+          return;
+        }
         setSession(nextSession ?? null);
         if (nextSession?.user?.id) {
+          writeActiveAccountEmail(nextSession.user.email);
           let userProfile = await getProfile(nextSession.user.id);
           if (!userProfile) userProfile = await upsertProfileFromUser(nextSession.user);
           userProfile = await ensureAdminProfile(nextSession.user, userProfile);
           setProfile(userProfile);
         } else {
+          writeActiveAccountEmail("");
           setProfile(null);
         }
       } catch (_error) {
@@ -129,8 +170,17 @@ function AuthProvider({ children }) {
       async signIn(email, password) {
         if (!supabase) throw new Error("Supabase is not configured.");
         const normalizedEmail = (email || "").trim().toLowerCase();
+        // Ensure any stale local session is cleared before a new login attempt.
+        await supabase.auth.signOut({ scope: "local" });
         const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
         if (error) throw error;
+        const signedEmail = (data?.user?.email || "").trim().toLowerCase();
+        if (signedEmail && signedEmail !== normalizedEmail) {
+          await supabase.auth.signOut({ scope: "local" });
+          writeActiveAccountEmail("");
+          throw new Error("Signed in to a different account. Please try again.");
+        }
+        writeActiveAccountEmail(normalizedEmail);
         return data;
       },
       async requestPasswordReset(email) {
@@ -184,6 +234,7 @@ function AuthProvider({ children }) {
       async signOut() {
         setSession(null);
         setProfile(null);
+        writeActiveAccountEmail("");
         if (!supabase) return;
         // Clear local browser session first so logout is reliable even with network hiccups.
         await supabase.auth.signOut({ scope: "local" });
