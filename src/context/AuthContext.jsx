@@ -105,13 +105,13 @@ function AuthProvider({ children }) {
         }
         setSession(nextSession);
         if (nextSession?.user?.id) {
-          writeActiveAccountEmail(nextSession.user.email);
+          // Bootstrap expected account only once for legacy sessions.
+          if (!expectedEmail) writeActiveAccountEmail(nextSession.user.email);
           let userProfile = await getProfile(nextSession.user.id);
           if (!userProfile) userProfile = await upsertProfileFromUser(nextSession.user);
           userProfile = await ensureAdminProfile(nextSession.user, userProfile);
           if (mounted) setProfile(userProfile);
         } else {
-          writeActiveAccountEmail("");
           if (mounted) setProfile(null);
         }
       })
@@ -132,20 +132,16 @@ function AuthProvider({ children }) {
           await supabase.auth.signOut({ scope: "local" });
           setSession(null);
           setProfile(null);
-          writeActiveAccountEmail("");
           return;
         }
         setSession(nextSession ?? null);
         if (nextSession?.user?.id) {
-          writeActiveAccountEmail(nextSession.user.email);
+          if (!expectedEmail) writeActiveAccountEmail(nextSession.user.email);
           let userProfile = await getProfile(nextSession.user.id);
           if (!userProfile) userProfile = await upsertProfileFromUser(nextSession.user);
           userProfile = await ensureAdminProfile(nextSession.user, userProfile);
           setProfile(userProfile);
-        } else {
-          writeActiveAccountEmail("");
-          setProfile(null);
-        }
+        } else setProfile(null);
       } catch (_error) {
         setSession(nextSession ?? null);
       } finally {
@@ -170,10 +166,13 @@ function AuthProvider({ children }) {
       async signIn(email, password) {
         if (!supabase) throw new Error("Supabase is not configured.");
         const normalizedEmail = (email || "").trim().toLowerCase();
-        // Ensure any stale local session is cleared before a new login attempt.
-        await supabase.auth.signOut({ scope: "local" });
+        // Pre-register the intended account so onAuthStateChange can accept this login.
+        writeActiveAccountEmail(normalizedEmail);
         const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
-        if (error) throw error;
+        if (error) {
+          writeActiveAccountEmail("");
+          throw error;
+        }
         const signedEmail = (data?.user?.email || "").trim().toLowerCase();
         if (signedEmail && signedEmail !== normalizedEmail) {
           await supabase.auth.signOut({ scope: "local" });
