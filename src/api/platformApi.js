@@ -10,12 +10,51 @@ function shouldUseMock() {
   return !hasSupabaseConfig || !supabase;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function ensureActiveSession() {
+  if (shouldUseMock()) return null;
+  const { data: sessionData } = await supabase.auth.getSession();
+  const session = sessionData?.session || null;
+  if (!session?.access_token) {
+    throw new Error("Session is missing. Please sign in again.");
+  }
+
+  const expiresAt = session.expires_at ? Number(session.expires_at) : 0;
+  const now = Math.floor(Date.now() / 1000);
+  if (expiresAt && expiresAt - now < 60) {
+    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError || !refreshed?.session?.access_token) {
+      throw new Error("Session expired. Please sign in again.");
+    }
+  }
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData?.user?.id) {
+    throw new Error("Authentication is invalid. Please sign in again.");
+  }
+  return userData.user;
+}
+
+async function resolveCurrentUser(maxAttempts = 3) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { data: userData } = await supabase.auth.getUser();
+    if (userData?.user) return userData.user;
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData?.session?.user) return sessionData.session.user;
+
+    await sleep(200 * (attempt + 1));
+  }
+  return null;
+}
+
 async function getCurrentActor() {
   if (shouldUseMock()) return { actorId: "mock-user", actorEmail: "mock@vetbridge.local" };
-  const { data } = await supabase.auth.getUser();
+  const user = await resolveCurrentUser();
   return {
-    actorId: data.user?.id ?? null,
-    actorEmail: data.user?.email ?? null
+    actorId: user?.id ?? null,
+    actorEmail: user?.email ?? null
   };
 }
 
@@ -92,9 +131,13 @@ export async function createCase(payload) {
   if (shouldUseMock()) return mockApi.createCase(payload);
 
   const actor = await getCurrentActor();
+  const resolvedClinicId = payload.clinicId || actor.actorId || actor.actorEmail;
+  if (!resolvedClinicId) {
+    throw new Error("Authenticated clinic identity is unavailable. Please sign in again.");
+  }
   const insertPayload = {
     ...toCaseInsert(payload),
-    clinic_id: actor.actorId || payload.clinicId || actor.actorEmail || "clinic-demo"
+    clinic_id: resolvedClinicId
   };
   const { data, error } = await supabase.from("cases").insert([insertPayload]).select().single();
   if (error) throw error;
@@ -110,52 +153,105 @@ export async function createCase(payload) {
 
 export async function listCases() {
   if (shouldUseMock()) return mockApi.listCases();
-  try {
-    const { data, error } = await supabase.from("cases").select("*").order("submitted_at", { ascending: false });
-    if (error) {
-      return mockApi.listCases();
-    }
-    if (!data || data.length === 0) {
-      // Fallback for pilot/dev when Supabase table is empty.
-      return mockApi.listCases();
-    }
-    return data.map(normalizeCase);
-  } catch (_error) {
-    // Last-resort fallback to keep dashboard usable.
-    return mockApi.listCases();
-  }
+  const { data, error } = await supabase.from("cases").select("*").order("submitted_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(normalizeCase);
 }
 
-export async function listClinicCases() {
+export async function listClinicCases(identity = {}) {
   if (shouldUseMock()) return mockApi.listCases();
-  const actor = await getCurrentActor();
-  if (!actor.actorId && !actor.actorEmail) return [];
+  await ensureActiveSession();
+  const requestedClinicId = identity.clinicId || null;
+  const requestedClinicEmail = identity.clinicEmail || null;
+  const actor = requestedClinicId || requestedClinicEmail ? null : await getCurrentActor();
+  const clinicId = requestedClinicId || actor?.actorId || null;
+  const clinicEmail = requestedClinicEmail || actor?.actorEmail || null;
+  if (!clinicId && !clinicEmail) return [];
 
   // Primary keying: clinic_id = auth.uid()
-  if (actor.actorId) {
+  if (clinicId) {
     const { data, error } = await supabase
       .from("cases")
       .select("*")
-      .eq("clinic_id", actor.actorId)
+      .eq("clinic_id", clinicId)
       .order("submitted_at", { ascending: false });
+    if (error) throw error;
     if (!error && Array.isArray(data) && data.length > 0) {
       return data.map(normalizeCase);
     }
   }
 
   // Backward compatibility for rows saved with email-based clinic_id.
-  if (actor.actorEmail) {
+  if (clinicEmail) {
     const { data, error } = await supabase
       .from("cases")
       .select("*")
-      .eq("clinic_id", actor.actorEmail)
+      .eq("clinic_id", clinicEmail)
       .order("submitted_at", { ascending: false });
+    if (error) throw error;
     if (!error && Array.isArray(data)) {
       return data.map(normalizeCase);
     }
   }
 
   return [];
+}
+
+export async function debugClinicCaseAccess(identity = {}) {
+  if (shouldUseMock()) {
+    return {
+      mode: "mock",
+      hasSupabaseConfig,
+      clinicId: identity.clinicId || null,
+      clinicEmail: identity.clinicEmail || null,
+      sessionUserId: null,
+      sessionUserEmail: null,
+      idMatchCount: null,
+      emailMatchCount: null,
+      visibleCaseCount: null
+    };
+  }
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  const { data: userData } = await supabase.auth.getUser();
+  const sessionUser = userData?.user || sessionData?.session?.user || null;
+  const clinicId = identity.clinicId || sessionUser?.id || null;
+  const clinicEmail = identity.clinicEmail || sessionUser?.email || null;
+
+  let idMatchCount = null;
+  let emailMatchCount = null;
+  let visibleCaseCount = null;
+
+  if (clinicId) {
+    const { count } = await supabase
+      .from("cases")
+      .select("id", { count: "exact", head: true })
+      .eq("clinic_id", clinicId);
+    idMatchCount = count ?? 0;
+  }
+
+  if (clinicEmail) {
+    const { count } = await supabase
+      .from("cases")
+      .select("id", { count: "exact", head: true })
+      .eq("clinic_id", clinicEmail);
+    emailMatchCount = count ?? 0;
+  }
+
+  const { count: allVisibleCount } = await supabase.from("cases").select("id", { count: "exact", head: true });
+  visibleCaseCount = allVisibleCount ?? 0;
+
+  return {
+    mode: "supabase",
+    hasSupabaseConfig,
+    clinicId,
+    clinicEmail,
+    sessionUserId: sessionUser?.id || null,
+    sessionUserEmail: sessionUser?.email || null,
+    idMatchCount,
+    emailMatchCount,
+    visibleCaseCount
+  };
 }
 
 export async function getCase(caseId) {
