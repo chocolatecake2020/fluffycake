@@ -152,7 +152,12 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
   const status = payment?.method === P2P_METHOD ? payment?.status : null;
   const paid = isPaymentPaid(payment);
   const reviewerEmail = reviewerProfile?.paypal_email || payment?.paypalRecipientEmail;
-  const reviewerLabel = reviewerProfile?.full_name || reviewerProfile?.email || reviewerId;
+  const reviewerLoginEmail = reviewerProfile?.email || null;
+  const reviewerName = reviewerProfile?.full_name || null;
+  const reviewerFallbackId =
+    !reviewerName && !reviewerLoginEmail ? reviewerId : null;
+  const paypalDiffersFromLogin =
+    reviewerEmail && reviewerLoginEmail && reviewerEmail !== reviewerLoginEmail;
   const noReviewer = !reviewerId;
   const noReviewerPaypal = reviewerId && !reviewerEmail;
 
@@ -177,7 +182,27 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
       <div className="grid two">
         <div>
           <small>Reviewer</small>
-          <p>{reviewerLabel || "Not assigned yet"}</p>
+          {noReviewer ? (
+            <p>Not assigned yet</p>
+          ) : (
+            <p style={{ lineHeight: 1.5 }}>
+              {reviewerName && <strong>{reviewerName}</strong>}
+              {reviewerName && reviewerLoginEmail && <br />}
+              {reviewerLoginEmail && (
+                <span className="auth-meta">Login: {reviewerLoginEmail}</span>
+              )}
+              {reviewerFallbackId && <span className="auth-meta">{reviewerFallbackId}</span>}
+              {reviewerEmail && (
+                <>
+                  <br />
+                  <span className="auth-meta">
+                    PayPal: <code>{reviewerEmail}</code>
+                    {paypalDiffersFromLogin ? " (differs from login)" : ""}
+                  </span>
+                </>
+              )}
+            </p>
+          )}
         </div>
         <div>
           <small>Status</small>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getCase, listCaseFiles, listClinicCases } from "../api/platformApi";
+import { getCase, getUserProfileById, listCaseFiles, listClinicCases } from "../api/platformApi";
 import {
   getPaymentForCase,
   isP2pEnabled,
@@ -23,6 +23,7 @@ function CaseDetailPage() {
   const [files, setFiles] = useState([]);
   const [paid, setPaid] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [reviewerProfile, setReviewerProfile] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,6 +50,17 @@ function CaseDetailPage() {
       setFiles(caseFiles || []);
       setPaid(isPaymentPaid(payment));
       setLoading(false);
+
+      const reviewerId = resolvedCase?.reviewerId;
+      if (reviewerId) {
+        getUserProfileById(reviewerId)
+          .then((p) => {
+            if (!cancelled) setReviewerProfile(p);
+          })
+          .catch(() => null);
+      } else {
+        setReviewerProfile(null);
+      }
     };
     load();
     return () => {
@@ -90,7 +102,22 @@ function CaseDetailPage() {
           <Info label="Patient information" value={`${item.patientName} / ${item.species}`} />
           <Info label="Clinic information" value={item.clinicId ?? "Assigned clinic"} />
           <Info label="Clinical question" value={item.complaint} />
-          <Info label="Reviewer assignment" value={item.reviewerId ?? "Unassigned"} />
+          <Info
+            label="Reviewer assignment"
+            value={
+              item.reviewerId
+                ? [
+                    reviewerProfile?.full_name,
+                    reviewerProfile?.email,
+                    !reviewerProfile?.full_name && !reviewerProfile?.email
+                      ? item.reviewerId
+                      : null
+                  ]
+                    .filter(Boolean)
+                    .join(" / ")
+                : "Unassigned"
+            }
+          />
           <Info label="Status" value={<StatusBadge status={item.status} />} />
           <Info label="Internal notes" value="Awaiting reviewer interpretation assistance." />
         </div>
