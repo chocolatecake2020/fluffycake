@@ -631,6 +631,16 @@ export async function uploadCaseFiles(caseId, files, options = {}) {
   }));
 }
 
+export async function updateMyUserProfile(userId, patch) {
+  if (!userId) throw new Error("userId is required.");
+  if (!patch || !Object.keys(patch).length) {
+    throw new Error("Profile patch payload is empty.");
+  }
+  if (shouldUseMock()) return null;
+  const rows = await restUpdate("user_profiles", patch, { match: { id: userId } });
+  return Array.isArray(rows) && rows.length ? rows[0] : null;
+}
+
 export async function getUserProfileById(userId) {
   if (!userId) return null;
   if (shouldUseMock()) return null;

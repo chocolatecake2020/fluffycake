@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { getUserProfileById, updateMyUserProfile } from "../api/platformApi";
 import { hasSupabaseConfig, supabase } from "../lib/supabaseClient";
 
 const AuthContext = createContext(null);
@@ -241,17 +242,36 @@ function AuthProvider({ children }) {
         return data;
       },
       async updatePayoutEmail(paypalEmail) {
-        if (!supabase || !session?.user?.id) {
+        if (!session?.user?.id) {
           throw new Error("Sign in is required to update payout email.");
         }
+        const userId = session.user.id;
         const normalized = (paypalEmail || "").trim().toLowerCase();
-        const { error } = await supabase
-          .from("user_profiles")
-          .update({ paypal_email: normalized })
-          .eq("id", session.user.id);
-        if (error) throw error;
-        const refreshed = await getProfile(session.user.id);
-        setProfile(refreshed);
+        // Use REST-based update to avoid Supabase JS auth-token storage lock contention,
+        // which can intermittently block updates when switching reviewer accounts.
+        let updated = null;
+        try {
+          updated = await updateMyUserProfile(userId, { paypal_email: normalized });
+        } catch (restError) {
+          if (!supabase) throw restError;
+          const { error } = await supabase
+            .from("user_profiles")
+            .update({ paypal_email: normalized })
+            .eq("id", userId);
+          if (error) throw error;
+        }
+        let refreshed = updated;
+        if (!refreshed) {
+          refreshed = await getUserProfileById(userId).catch(() => null);
+        }
+        if (!refreshed && supabase) {
+          refreshed = await getProfile(userId).catch(() => null);
+        }
+        if (refreshed) {
+          setProfile(refreshed);
+        } else {
+          setProfile((prev) => (prev ? { ...prev, paypal_email: normalized } : prev));
+        }
         return refreshed;
       },
       async signOut() {
