@@ -386,8 +386,26 @@ export async function debugClinicCaseAccess(identity = {}) {
 export async function getCase(caseId) {
   if (shouldUseMock()) return mockApi.getCase(caseId);
   if (!caseId) return null;
-  const rows = await listCasesViaRest({ filterColumn: "id", filterValue: caseId });
-  return rows.length ? rows[0] : null;
+
+  // Primary: direct id filter via REST.
+  try {
+    const rows = await listCasesViaRest({ filterColumn: "id", filterValue: caseId });
+    if (rows.length) return rows[0];
+  } catch (_primaryError) {
+    // Swallow and try fallback below.
+  }
+
+  // Fallback: pull the case list this session is allowed to see and pick by id.
+  // Helps when a single-row id query is blocked or returns empty due to RLS edge cases.
+  try {
+    const all = await listCasesViaRest();
+    const match = Array.isArray(all) ? all.find((c) => c.id === caseId) : null;
+    if (match) return match;
+  } catch (_fallbackError) {
+    // Final fallthrough: signal not found instead of throwing.
+  }
+
+  return null;
 }
 
 export async function assignReviewer(caseId, reviewerId) {

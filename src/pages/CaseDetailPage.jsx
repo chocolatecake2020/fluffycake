@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getCase, listCaseFiles } from "../api/platformApi";
+import { getCase, listCaseFiles, listClinicCases } from "../api/platformApi";
 import {
   getPaymentForCase,
   isP2pEnabled,
@@ -22,25 +22,62 @@ function CaseDetailPage() {
   const [item, setItem] = useState(null);
   const [files, setFiles] = useState([]);
   const [paid, setPaid] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([getCase(caseId), listCaseFiles(caseId), getPaymentForCase(caseId)]).then(
-      ([caseData, caseFiles, payment]) => {
-        setItem(caseData);
-        setFiles(caseFiles);
-        setPaid(isPaymentPaid(payment));
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      const [caseData, caseFiles, payment] = await Promise.all([
+        getCase(caseId).catch(() => null),
+        listCaseFiles(caseId).catch(() => []),
+        getPaymentForCase(caseId).catch(() => null)
+      ]);
+
+      let resolvedCase = caseData;
+      if (!resolvedCase && profile?.role === "clinic") {
+        try {
+          const clinicCases = await listClinicCases();
+          resolvedCase = clinicCases.find((c) => c.id === caseId) || null;
+        } catch (_error) {
+          // ignore
+        }
       }
-    );
-  }, [caseId]);
+
+      if (cancelled) return;
+      setItem(resolvedCase);
+      setFiles(caseFiles || []);
+      setPaid(isPaymentPaid(payment));
+      setLoading(false);
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [caseId, profile?.role]);
 
   const handlePaymentChanged = useCallback((payment) => {
     setPaid(isPaymentPaid(payment));
   }, []);
 
+  if (loading) {
+    return (
+      <main className="container">
+        <section className="card">Loading case...</section>
+      </main>
+    );
+  }
+
   if (!item) {
     return (
       <main className="container">
-        <section className="card">Case not found.</section>
+        <section className="card">
+          <p>Case not found, or your session may have expired.</p>
+          <p className="auth-meta">
+            Try returning to the <Link to="/clinic">workspace</Link> and reopening the case. If the
+            issue persists, sign out and back in to refresh your session.
+          </p>
+        </section>
       </main>
     );
   }
