@@ -70,7 +70,10 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
   const reviewerId = caseItem?.reviewerId || null;
   const caseId = caseItem?.id;
   const amountUsd = useMemo(() => getDefaultCasePriceUsd(), []);
-  const isClinic = role === "clinic";
+  // Treat anyone who is not explicitly a reviewer/admin as a clinic actor.
+  // This keeps the payment flow visible even when a profile.role value has
+  // not been persisted yet (e.g. legacy account or skipped role selection).
+  const isClinic = role !== "reviewer" && role !== "admin";
 
   useEffect(() => {
     let cancelled = false;

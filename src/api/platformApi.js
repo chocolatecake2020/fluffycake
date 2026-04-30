@@ -457,9 +457,18 @@ export async function submitReport(caseId, reportPayload) {
   }
 
   const actor = await getCurrentActor();
+  const casePatch = {
+    report: reportPayload,
+    status: "Report Ready"
+  };
+  // Auto-claim the case for the reviewer that actually submitted the report,
+  // so the clinic-side P2P flow can display the reviewer's PayPal email.
+  if (actor?.actorId) {
+    casePatch.reviewer_id = actor.actorId;
+  }
   const updatedRows = await restUpdate(
     "cases",
-    { report: reportPayload, status: "Report Ready" },
+    casePatch,
     { match: { id: caseId } }
   );
   const data = Array.isArray(updatedRows) ? updatedRows[0] : updatedRows;
