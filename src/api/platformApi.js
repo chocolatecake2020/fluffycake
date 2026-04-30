@@ -647,7 +647,10 @@ export async function getUserProfileById(userId) {
   if (!supabaseUrl || !supabaseAnonKey) return null;
   const accessToken = readStoredAccessToken();
   if (!accessToken) return null;
-  const endpoint = `${supabaseUrl}/rest/v1/user_profiles?select=id,email,full_name,role,paypal_email,phone,institution&id=eq.${toRestQueryValue(
+  // Use select=* so missing optional columns (full_name / phone / institution) do not
+  // cause the request to fail with 400, which would silently return null and break
+  // the payment panel reviewer lookup.
+  const endpoint = `${supabaseUrl}/rest/v1/user_profiles?select=*&id=eq.${toRestQueryValue(
     userId
   )}&limit=1`;
   const response = await fetch(endpoint, {
