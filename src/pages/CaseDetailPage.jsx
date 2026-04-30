@@ -1,10 +1,16 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getCase, listCaseFiles } from "../api/platformApi";
-import { getPaymentForCase, isPaymentPaid } from "../api/paymentsApi";
+import {
+  getPaymentForCase,
+  isP2pEnabled,
+  isPaymentPaid,
+  isPlatformCheckoutEnabled
+} from "../api/paymentsApi";
 import Info from "../components/common/Info";
 import StatusBadge from "../components/common/StatusBadge";
 import { useAuth } from "../context/AuthContext";
+import P2pPaymentPanel from "../features/payments/components/P2pPaymentPanel";
 
 function isImageFile(file) {
   return file.fileType?.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp)$/i.test(file.fileName || "");
@@ -26,6 +32,10 @@ function CaseDetailPage() {
       }
     );
   }, [caseId]);
+
+  const handlePaymentChanged = useCallback((payment) => {
+    setPaid(isPaymentPaid(payment));
+  }, []);
 
   if (!item) {
     return (
@@ -88,6 +98,7 @@ function CaseDetailPage() {
           <li>Report pending</li>
         </ul>
       </section>
+      <P2pPaymentPanel caseItem={item} role={profile?.role} onPaymentChanged={handlePaymentChanged} />
       <section className="card" id="report">
         <h3>Report</h3>
         {(() => {
@@ -100,14 +111,24 @@ function CaseDetailPage() {
           }
 
           if (!canViewReport) {
+            const showPlatformCta = isPlatformCheckoutEnabled();
+            const showP2pCta = isP2pEnabled();
             return (
               <div className="row between">
                 <p>
-                  Review report is locked. Complete payment to unlock the full report.
+                  {showP2pCta && !showPlatformCta
+                    ? "Review report is locked. Complete the direct PayPal settlement above and wait for admin verification to unlock the report."
+                    : "Review report is locked. Complete payment to unlock the full report."}
                 </p>
-                <Link className="btn primary" to={`/payments?caseId=${encodeURIComponent(item.id)}`}>
-                  Pay to Unlock
-                </Link>
+                {showP2pCta && !showPlatformCta ? (
+                  <a className="btn primary" href="#payment">
+                    Go to Payment
+                  </a>
+                ) : (
+                  <Link className="btn primary" to={`/payments?caseId=${encodeURIComponent(item.id)}`}>
+                    Pay to Unlock
+                  </Link>
+                )}
               </div>
             );
           }

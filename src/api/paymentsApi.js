@@ -12,6 +12,21 @@ const paypalPaymentLink = import.meta.env.VITE_PAYPAL_PAYMENT_LINK || "";
 const PLATFORM_FEE_USD = Number(import.meta.env.VITE_PLATFORM_FEE_USD || 4.99);
 const DEFAULT_CASE_PRICE_USD = Number(import.meta.env.VITE_CASE_PRICE_USD || 4.99);
 
+const RAW_PAYMENT_MODE = String(import.meta.env.VITE_PAYMENT_MODE || "p2p").toLowerCase();
+const PAYMENT_MODE = ["p2p", "platform", "both"].includes(RAW_PAYMENT_MODE) ? RAW_PAYMENT_MODE : "p2p";
+
+export function getPaymentMode() {
+  return PAYMENT_MODE;
+}
+
+export function isP2pEnabled() {
+  return PAYMENT_MODE === "p2p" || PAYMENT_MODE === "both";
+}
+
+export function isPlatformCheckoutEnabled() {
+  return PAYMENT_MODE === "platform" || PAYMENT_MODE === "both";
+}
+
 export function getPlatformFeeUsd() {
   return PLATFORM_FEE_USD;
 }
@@ -19,6 +34,16 @@ export function getPlatformFeeUsd() {
 export function getDefaultCasePriceUsd() {
   return DEFAULT_CASE_PRICE_USD;
 }
+
+export const P2P_STATUSES = Object.freeze({
+  AWAITING_CLINIC_PAYMENT: "awaiting_clinic_payment",
+  AWAITING_ADMIN_CONFIRMATION: "awaiting_admin_confirmation",
+  PAID: "paid",
+  REJECTED: "rejected"
+});
+
+export const P2P_PROVIDER = "PayPal (Direct P2P)";
+export const P2P_METHOD = "p2p_paypal";
 
 const methodCatalog = [
   {
@@ -91,6 +116,220 @@ async function upsertPaymentRecord(payment) {
     inMemoryPayments.set(payment.paymentId, payment);
   }
   return payment;
+}
+
+function normalizePaymentRow(row) {
+  if (!row) return null;
+  return {
+    paymentId: row.payment_id,
+    method: row.method,
+    provider: row.provider,
+    status: row.status,
+    amount: row.amount,
+    currency: row.currency,
+    caseId: row.case_id,
+    network: row.network,
+    depositAddress: row.deposit_address,
+    reference: row.reference,
+    remitterName: row.remitter_name,
+    redirectUrl: row.redirect_url,
+    paypalRecipientEmail: row.paypal_recipient_email || null,
+    transactionReference: row.transaction_reference || row.reference || null,
+    proofUrl: row.proof_url || null,
+    rejectionReason: row.rejection_reason || null,
+    rawPayload: row.raw_payload || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+async function upsertP2pRow(row) {
+  if (!useSupabaseStore) {
+    const memory = {
+      paymentId: row.payment_id,
+      method: row.method,
+      provider: row.provider,
+      status: row.status,
+      amount: row.amount,
+      currency: row.currency,
+      caseId: row.case_id,
+      paypalRecipientEmail: row.paypal_recipient_email,
+      transactionReference: row.transaction_reference,
+      proofUrl: row.proof_url,
+      rejectionReason: row.rejection_reason,
+      reference: row.transaction_reference || null,
+      createdAt: inMemoryPayments.get(row.payment_id)?.createdAt || new Date().toISOString()
+    };
+    inMemoryPayments.set(row.payment_id, memory);
+    return memory;
+  }
+
+  const { data, error } = await supabase
+    .from("payment_transactions")
+    .upsert(row, { onConflict: "payment_id" })
+    .select()
+    .single();
+  if (error) throw error;
+  return normalizePaymentRow(data);
+}
+
+export async function createP2pPayment({ caseId, paypalRecipientEmail, amount, currency = "USD" } = {}) {
+  if (!caseId) throw new Error("caseId is required.");
+  if (!paypalRecipientEmail) throw new Error("Reviewer's PayPal email is required.");
+  const paymentId = `p2p_${caseId}_${Date.now()}`;
+  return upsertP2pRow({
+    payment_id: paymentId,
+    method: P2P_METHOD,
+    provider: P2P_PROVIDER,
+    status: P2P_STATUSES.AWAITING_CLINIC_PAYMENT,
+    amount: Number(amount || DEFAULT_CASE_PRICE_USD),
+    currency,
+    case_id: caseId,
+    paypal_recipient_email: paypalRecipientEmail,
+    raw_payload: { mode: "p2p", initiatedAt: new Date().toISOString() }
+  });
+}
+
+async function uploadP2pProof(caseId, paymentId, file) {
+  if (!useSupabaseStore || !file) return null;
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `payment-proofs/${caseId}/${paymentId}-${Date.now()}-${safeName}`;
+  const { error: uploadError } = await supabase.storage
+    .from("case-files")
+    .upload(path, file, { upsert: false, cacheControl: "3600" });
+  if (uploadError) throw uploadError;
+  const { data } = supabase.storage.from("case-files").getPublicUrl(path);
+  return data?.publicUrl || null;
+}
+
+export async function submitP2pConfirmation({ paymentId, caseId, transactionReference, proofFile } = {}) {
+  if (!paymentId) throw new Error("paymentId is required.");
+  if (!transactionReference) throw new Error("PayPal transaction reference is required.");
+  if (!proofFile) throw new Error("Payment proof screenshot is required.");
+
+  const proofUrl = await uploadP2pProof(caseId, paymentId, proofFile);
+
+  return upsertP2pRow({
+    payment_id: paymentId,
+    method: P2P_METHOD,
+    provider: P2P_PROVIDER,
+    status: P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION,
+    case_id: caseId,
+    transaction_reference: transactionReference,
+    reference: transactionReference,
+    proof_url: proofUrl,
+    raw_payload: {
+      mode: "p2p",
+      submittedAt: new Date().toISOString(),
+      transactionReference,
+      proofUrl
+    }
+  });
+}
+
+// One-shot helper used by the clinic UI: ensures a payment record exists,
+// uploads the screenshot, and moves the status to awaiting_admin_confirmation
+// in a single user action.
+export async function submitP2pPayment({
+  caseId,
+  paypalRecipientEmail,
+  amount,
+  currency = "USD",
+  transactionReference,
+  proofFile
+} = {}) {
+  if (!caseId) throw new Error("caseId is required.");
+  if (!paypalRecipientEmail) throw new Error("Reviewer's PayPal email is required.");
+  if (!transactionReference) throw new Error("PayPal transaction reference is required.");
+  if (!proofFile) throw new Error("Payment proof screenshot is required.");
+
+  let payment = await getPaymentForCase(caseId);
+  if (!payment || payment.method !== P2P_METHOD) {
+    payment = await createP2pPayment({
+      caseId,
+      paypalRecipientEmail,
+      amount,
+      currency
+    });
+  }
+
+  return submitP2pConfirmation({
+    paymentId: payment.paymentId,
+    caseId,
+    transactionReference,
+    proofFile
+  });
+}
+
+const PAYPAL_TX_ID_REGEX = /^[A-Z0-9]{17}$/;
+
+export function isValidPaypalTransactionId(value) {
+  if (!value) return false;
+  return PAYPAL_TX_ID_REGEX.test(String(value).trim().toUpperCase());
+}
+
+export const PAYPAL_SEND_MONEY_URL = "https://www.paypal.com/myaccount/transfer/homepage/pay";
+
+export async function approveP2pPayment({ paymentId, caseId, approvedBy } = {}) {
+  if (!paymentId) throw new Error("paymentId is required.");
+  const result = await upsertP2pRow({
+    payment_id: paymentId,
+    method: P2P_METHOD,
+    provider: P2P_PROVIDER,
+    status: P2P_STATUSES.PAID,
+    case_id: caseId,
+    raw_payload: {
+      mode: "p2p",
+      approvedAt: new Date().toISOString(),
+      approvedBy: approvedBy || null
+    }
+  });
+  if (caseId) {
+    try {
+      await recheckPayout(caseId);
+    } catch (_payoutError) {
+      // Payout queue refresh should not block approval result.
+    }
+  }
+  return result;
+}
+
+export async function rejectP2pPayment({ paymentId, caseId, reason, rejectedBy } = {}) {
+  if (!paymentId) throw new Error("paymentId is required.");
+  return upsertP2pRow({
+    payment_id: paymentId,
+    method: P2P_METHOD,
+    provider: P2P_PROVIDER,
+    status: P2P_STATUSES.REJECTED,
+    case_id: caseId,
+    rejection_reason: reason || "Rejected by admin",
+    raw_payload: {
+      mode: "p2p",
+      rejectedAt: new Date().toISOString(),
+      rejectedBy: rejectedBy || null,
+      reason: reason || null
+    }
+  });
+}
+
+export async function listPendingP2pConfirmations() {
+  if (!useSupabaseStore) {
+    return Array.from(inMemoryPayments.values())
+      .filter(
+        (item) =>
+          item.method === P2P_METHOD &&
+          item.status === P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION
+      )
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  }
+  const { data, error } = await supabase
+    .from("payment_transactions")
+    .select("*")
+    .eq("method", P2P_METHOD)
+    .eq("status", P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION)
+    .order("created_at", { ascending: false });
+  if (error || !Array.isArray(data)) return [];
+  return data.map(normalizePaymentRow);
 }
 
 async function getPersistedPayment(paymentId) {
@@ -243,15 +482,7 @@ export async function getPaymentForCase(caseId) {
     .order("created_at", { ascending: false })
     .limit(1);
   if (error || !Array.isArray(data) || data.length === 0) return null;
-  const row = data[0];
-  return {
-    paymentId: row.payment_id,
-    status: row.status,
-    method: row.method,
-    amount: row.amount,
-    currency: row.currency,
-    caseId: row.case_id
-  };
+  return normalizePaymentRow(data[0]);
 }
 
 function normalizePayoutRow(row) {

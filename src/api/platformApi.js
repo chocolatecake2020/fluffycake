@@ -604,6 +604,29 @@ export async function uploadCaseFiles(caseId, files, options = {}) {
   }));
 }
 
+export async function getUserProfileById(userId) {
+  if (!userId) return null;
+  if (shouldUseMock()) return null;
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  const accessToken = readStoredAccessToken();
+  if (!accessToken) return null;
+  const endpoint = `${supabaseUrl}/rest/v1/user_profiles?select=id,email,full_name,role,paypal_email,phone,institution&id=eq.${toRestQueryValue(
+    userId
+  )}&limit=1`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json"
+    }
+  });
+  if (!response.ok) return null;
+  const rows = await response.json();
+  if (!Array.isArray(rows) || !rows.length) return null;
+  return rows[0];
+}
+
 export async function listCaseFiles(caseId) {
   if (shouldUseMock()) return inMemoryCaseFiles.filter((file) => file.caseId === caseId);
   if (!caseId) return [];

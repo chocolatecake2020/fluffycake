@@ -4,6 +4,8 @@ import {
   createCheckoutSession,
   createUsdtCharge,
   getPaymentStatus,
+  isP2pEnabled,
+  isPlatformCheckoutEnabled,
   listPaymentMethods,
   registerBankTransfer
 } from "../api/paymentsApi";
@@ -128,11 +130,27 @@ function PaymentSettlementPage() {
     }
   };
 
+  const platformEnabled = isPlatformCheckoutEnabled();
+  const p2pEnabled = isP2pEnabled();
+
   return (
     <main className="container narrow">
       <section className="card">
         <h2>Payment / Settlement</h2>
         <p>Pilot payment orchestration skeleton (mock provider APIs, ready for Stripe / PayPal / USDT gateway swap).</p>
+        {p2pEnabled && (
+          <div className="warning-box">
+            <strong>Pilot mode:</strong> Direct PayPal settlement is enabled. For each case, the
+            clinic pays the reviewer directly via PayPal and submits the proof on the case detail
+            page. The admin then verifies and unlocks the report.
+          </div>
+        )}
+        {!platformEnabled && (
+          <p className="auth-meta">
+            Platform-managed checkout is currently disabled. Use the case detail page for direct
+            PayPal settlement.
+          </p>
+        )}
         {returnStatus && <p className="auth-meta">Checkout returned with status: {returnStatus}</p>}
         <PaymentLogoStrip />
         <div className="grid two payment-method-grid">

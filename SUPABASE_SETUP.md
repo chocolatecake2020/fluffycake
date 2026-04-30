@@ -148,6 +148,13 @@ create table if not exists payment_transactions (
   updated_at timestamptz default now()
 );
 
+-- P2P (clinic <-> reviewer direct PayPal) extension columns.
+alter table public.payment_transactions
+  add column if not exists paypal_recipient_email text,
+  add column if not exists transaction_reference text,
+  add column if not exists proof_url text,
+  add column if not exists rejection_reason text;
+
 create table if not exists payouts (
   id bigint generated always as identity primary key,
   case_id uuid unique references cases(id) on delete cascade,

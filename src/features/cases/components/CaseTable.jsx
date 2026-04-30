@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
+import { isP2pEnabled, isPlatformCheckoutEnabled } from "../../../api/paymentsApi";
 import StatusBadge from "../../../components/common/StatusBadge";
 
 function CaseTable({ items, paidCaseIds }) {
   const paidSet = paidCaseIds instanceof Set ? paidCaseIds : new Set(paidCaseIds || []);
+  const p2pOnly = isP2pEnabled() && !isPlatformCheckoutEnabled();
 
   return (
     <table>
@@ -19,6 +21,9 @@ function CaseTable({ items, paidCaseIds }) {
       <tbody>
         {items.map((item) => {
           const isPaid = paidSet.has(item.id);
+          const payHref = p2pOnly
+            ? `/cases/${item.id}#payment`
+            : `/payments?caseId=${encodeURIComponent(item.id)}`;
           return (
             <tr key={item.id}>
               <td>
@@ -36,7 +41,7 @@ function CaseTable({ items, paidCaseIds }) {
                     Paid · View Review
                   </Link>
                 ) : (
-                  <Link className="btn small" to={`/payments?caseId=${encodeURIComponent(item.id)}`}>
+                  <Link className="btn small" to={payHref}>
                     Pay
                   </Link>
                 )}
