@@ -1,14 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { listAuditEvents, listCases, listClinics, listReviewers, listSubmittedReports } from "../api/platformApi";
+import { listPayouts } from "../api/paymentsApi";
 import DashboardHeader from "../components/common/DashboardHeader";
 import { adminMenu } from "../constants/menus";
 import AdminCaseControlTable from "../features/admin/components/AdminCaseControlTable";
 import AdminMetricsGrid from "../features/admin/components/AdminMetricsGrid";
+import PayoutsQueueTable from "../features/admin/components/PayoutsQueueTable";
 
 function AdminDashboard() {
   const [data, setData] = useState({ clinics: [], reviewers: [], cases: [] });
   const [auditEvents, setAuditEvents] = useState([]);
   const [submittedReports, setSubmittedReports] = useState([]);
+  const [payouts, setPayouts] = useState([]);
+
+  const refreshPayouts = useCallback(async () => {
+    try {
+      const list = await listPayouts();
+      setPayouts(list);
+    } catch (_error) {
+      setPayouts([]);
+    }
+  }, []);
 
   useEffect(() => {
     Promise.all([listClinics(), listReviewers(), listCases(), listAuditEvents(12), listSubmittedReports(8)]).then(
@@ -18,7 +30,8 @@ function AdminDashboard() {
         setSubmittedReports(reports);
       }
     );
-  }, []);
+    refreshPayouts();
+  }, [refreshPayouts]);
 
   const metrics = useMemo(
     () => [
@@ -38,6 +51,7 @@ function AdminDashboard() {
       <DashboardHeader title="Admin Dashboard" menu={adminMenu} />
       <AdminMetricsGrid metrics={metrics} />
       <AdminCaseControlTable items={data.cases} />
+      <PayoutsQueueTable items={payouts} onRefresh={refreshPayouts} />
       <section className="card">
         <h3>Recent Submitted Reports</h3>
         <table>

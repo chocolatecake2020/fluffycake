@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { getCase, listCaseFiles } from "../api/platformApi";
+import { getPaymentForCase, isPaymentPaid } from "../api/paymentsApi";
 import Info from "../components/common/Info";
 import StatusBadge from "../components/common/StatusBadge";
+import { useAuth } from "../context/AuthContext";
 
 function isImageFile(file) {
   return file.fileType?.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp)$/i.test(file.fileName || "");
@@ -10,14 +12,19 @@ function isImageFile(file) {
 
 function CaseDetailPage() {
   const { caseId } = useParams();
+  const { profile } = useAuth();
   const [item, setItem] = useState(null);
   const [files, setFiles] = useState([]);
+  const [paid, setPaid] = useState(false);
 
   useEffect(() => {
-    Promise.all([getCase(caseId), listCaseFiles(caseId)]).then(([caseData, caseFiles]) => {
-      setItem(caseData);
-      setFiles(caseFiles);
-    });
+    Promise.all([getCase(caseId), listCaseFiles(caseId), getPaymentForCase(caseId)]).then(
+      ([caseData, caseFiles, payment]) => {
+        setItem(caseData);
+        setFiles(caseFiles);
+        setPaid(isPaymentPaid(payment));
+      }
+    );
   }, [caseId]);
 
   if (!item) {
@@ -81,21 +88,42 @@ function CaseDetailPage() {
           <li>Report pending</li>
         </ul>
       </section>
-      <section className="card">
+      <section className="card" id="report">
         <h3>Report</h3>
-        {item.report ? (
-          <div className="grid two">
-            <Info label="Case Summary" value={item.report.caseSummary || "-"} />
-            <Info label="Imaging / Clinical Findings" value={item.report.findings || "-"} />
-            <Info label="Interpretation" value={item.report.interpretation || "-"} />
-            <Info label="Differential Considerations" value={item.report.differential || "-"} />
-            <Info label="Recommendations" value={item.report.recommendations || "-"} />
-            <Info label="Limitations" value={item.report.limitations || "-"} />
-            <Info label="Reviewer Signature" value={item.report.reviewerSignature || "-"} />
-          </div>
-        ) : (
-          <p>No report submitted yet.</p>
-        )}
+        {(() => {
+          const role = profile?.role;
+          const reviewerCanView = role === "reviewer" || role === "admin";
+          const canViewReport = reviewerCanView || paid;
+
+          if (!item.report) {
+            return <p>No report submitted yet.</p>;
+          }
+
+          if (!canViewReport) {
+            return (
+              <div className="row between">
+                <p>
+                  Review report is locked. Complete payment to unlock the full report.
+                </p>
+                <Link className="btn primary" to={`/payments?caseId=${encodeURIComponent(item.id)}`}>
+                  Pay to Unlock
+                </Link>
+              </div>
+            );
+          }
+
+          return (
+            <div className="grid two">
+              <Info label="Case Summary" value={item.report.caseSummary || "-"} />
+              <Info label="Imaging / Clinical Findings" value={item.report.findings || "-"} />
+              <Info label="Interpretation" value={item.report.interpretation || "-"} />
+              <Info label="Differential Considerations" value={item.report.differential || "-"} />
+              <Info label="Recommendations" value={item.report.recommendations || "-"} />
+              <Info label="Limitations" value={item.report.limitations || "-"} />
+              <Info label="Reviewer Signature" value={item.report.reviewerSignature || "-"} />
+            </div>
+          );
+        })()}
       </section>
     </main>
   );

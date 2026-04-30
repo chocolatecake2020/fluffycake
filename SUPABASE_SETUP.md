@@ -31,6 +31,7 @@ create table if not exists user_profiles (
 alter table user_profiles add column if not exists phone text;
 alter table user_profiles add column if not exists full_name text;
 alter table user_profiles add column if not exists institution text;
+alter table user_profiles add column if not exists paypal_email text;
 
 create table if not exists cases (
   id uuid primary key default gen_random_uuid(),
@@ -146,6 +147,37 @@ create table if not exists payment_transactions (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+
+create table if not exists payouts (
+  id bigint generated always as identity primary key,
+  case_id uuid unique references cases(id) on delete cascade,
+  reviewer_id uuid,
+  reviewer_email text,
+  paypal_email text,
+  gross_amount numeric(12,2) default 0,
+  platform_fee numeric(12,2) default 0,
+  net_amount numeric(12,2) default 0,
+  currency text default 'USD',
+  status text not null default 'pending',
+  notes text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create or replace function public.set_payouts_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_payouts_updated_at on public.payouts;
+create trigger trg_payouts_updated_at
+before update on public.payouts
+for each row execute function public.set_payouts_updated_at();
 ```
 
 ## 3) Minimal RLS for pilot
@@ -163,6 +195,7 @@ alter table submitted_reports enable row level security;
 alter table audit_events enable row level security;
 alter table reviewer_applications enable row level security;
 alter table payment_transactions enable row level security;
+alter table payouts enable row level security;
 
 create policy "authenticated read profiles" on user_profiles
 for select to authenticated using (true);
@@ -191,6 +224,39 @@ create policy "authenticated reviewer application read" on reviewer_applications
 for select to authenticated using (true);
 create policy "authenticated payment transactions full" on payment_transactions
 for all to authenticated using (true) with check (true);
+
+-- Payouts: reviewer can read own rows, admins read/write all,
+-- the app inserts/updates via authenticated session (pilot-friendly).
+create policy "payouts_select_own_or_admin"
+on public.payouts
+for select
+to authenticated
+using (
+  reviewer_id = auth.uid()
+  or exists (
+    select 1 from public.user_profiles up
+    where up.id = auth.uid() and up.role = 'admin'
+  )
+);
+
+create policy "payouts_insert_authenticated"
+on public.payouts
+for insert
+to authenticated
+with check (true);
+
+create policy "payouts_update_admin_or_owner"
+on public.payouts
+for update
+to authenticated
+using (
+  reviewer_id = auth.uid()
+  or exists (
+    select 1 from public.user_profiles up
+    where up.id = auth.uid() and up.role = 'admin'
+  )
+)
+with check (true);
 ```
 
 Tighten these policies before production.

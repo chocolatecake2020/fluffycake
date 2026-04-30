@@ -15,7 +15,8 @@ function RoleSelectionPage() {
     phone: "",
     fullName: "",
     institution: "",
-    signupRole: "clinic"
+    signupRole: "clinic",
+    paypalEmail: ""
   });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -69,13 +70,18 @@ function RoleSelectionPage() {
         setMessage("This email is not allowed for admin signup.");
         return;
       }
+      if (form.signupRole === "reviewer" && !form.paypalEmail.trim()) {
+        setMessage("PayPal email is required for reviewer payouts.");
+        return;
+      }
       await signUp({
         email: form.email,
         password: form.password,
         phone: form.phone.trim(),
         role: form.signupRole,
         fullName: form.fullName.trim(),
-        institution: form.institution.trim()
+        institution: form.institution.trim(),
+        paypalEmail: form.paypalEmail.trim()
       });
       setMessage("Account created. You can sign in now.");
     } catch (error) {
@@ -151,6 +157,18 @@ function RoleSelectionPage() {
                 {canSignupAdmin && <option value="admin">Admin</option>}
               </select>
             </div>
+            {form.signupRole === "reviewer" && (
+              <div>
+                <label>PayPal Email (for reviewer payouts)</label>
+                <input
+                  name="paypalEmail"
+                  type="email"
+                  value={form.paypalEmail}
+                  onChange={onChange}
+                  placeholder="reviewer@paypal.com"
+                />
+              </div>
+            )}
             <div className="row full">
               <button className="btn primary" onClick={handleSignIn} disabled={loading}>
                 {loading ? "Working..." : "Sign In"}

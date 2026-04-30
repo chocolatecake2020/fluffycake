@@ -399,6 +399,46 @@ textarea:focus {
   padding: 12px;
 }
 
+.status-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.status-pill.status-paid {
+  background: #e6f5ec;
+  color: #1c6b3a;
+  border-color: #b6dec3;
+}
+
+.status-pill.status-pending {
+  background: #fff5e0;
+  color: #8a5a00;
+  border-color: #f0d59a;
+}
+
+.status-pill.status-processing {
+  background: #e9f0fb;
+  color: #234a8a;
+  border-color: #b9c8e6;
+}
+
+.status-pill.status-failed {
+  background: #fce8e6;
+  color: #8b1f15;
+  border-color: #f1b9b1;
+}
+
+.status-pill.status-blocked {
+  background: #f1ecf7;
+  color: #553582;
+  border-color: #d3c2eb;
+}
+
 .feature-grid .feature-card {
   border-left: 4px solid var(--metal-gold);
   transition: transform 0.14s ease, box-shadow 0.14s ease;

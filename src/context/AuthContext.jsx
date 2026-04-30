@@ -50,7 +50,8 @@ async function upsertProfileFromUser(user) {
     phone: metadata.phone || "",
     role: metadata.role || null,
     full_name: metadata.fullName || "",
-    institution: metadata.institution || ""
+    institution: metadata.institution || "",
+    paypal_email: metadata.paypalEmail || ""
   };
   const { error } = await supabase.from("user_profiles").upsert(payload, { onConflict: "id" });
   if (error) return null;
@@ -209,7 +210,15 @@ function AuthProvider({ children }) {
         const { error } = await supabase.auth.updateUser({ password });
         if (error) throw error;
       },
-      async signUp({ email, password, phone = "", role = "clinic", fullName = "", institution = "" }) {
+      async signUp({
+        email,
+        password,
+        phone = "",
+        role = "clinic",
+        fullName = "",
+        institution = "",
+        paypalEmail = ""
+      }) {
         if (!supabase) throw new Error("Supabase is not configured.");
         const normalizedEmail = (email || "").trim().toLowerCase();
         const { data, error } = await supabase.auth.signUp({
@@ -220,7 +229,8 @@ function AuthProvider({ children }) {
               phone,
               role,
               fullName,
-              institution
+              institution,
+              paypalEmail: (paypalEmail || "").trim().toLowerCase()
             }
           }
         });
@@ -229,6 +239,20 @@ function AuthProvider({ children }) {
           await upsertProfileFromUser(data.session.user);
         }
         return data;
+      },
+      async updatePayoutEmail(paypalEmail) {
+        if (!supabase || !session?.user?.id) {
+          throw new Error("Sign in is required to update payout email.");
+        }
+        const normalized = (paypalEmail || "").trim().toLowerCase();
+        const { error } = await supabase
+          .from("user_profiles")
+          .update({ paypal_email: normalized })
+          .eq("id", session.user.id);
+        if (error) throw error;
+        const refreshed = await getProfile(session.user.id);
+        setProfile(refreshed);
+        return refreshed;
       },
       async signOut() {
         setSession(null);

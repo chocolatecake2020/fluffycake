@@ -1,5 +1,6 @@
 import * as mockApi from "./mockApi";
-import { hasSupabaseConfig, supabase } from "../lib/supabaseClient";
+import { enqueuePayoutForReportSubmission } from "./paymentsApi";
+import { hasSupabaseConfig, supabase, supabaseAnonKey, supabaseUrl } from "../lib/supabaseClient";
 
 let inMemoryCaseFiles = [];
 let inMemoryAuditEvents = [];
@@ -10,52 +11,46 @@ function shouldUseMock() {
   return !hasSupabaseConfig || !supabase;
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const SUPABASE_AUTH_STORAGE_KEY = "vetbridge-auth-token";
 
-async function ensureActiveSession() {
-  if (shouldUseMock()) return null;
-  const { data: sessionData } = await supabase.auth.getSession();
-  const session = sessionData?.session || null;
-  if (!session?.access_token) {
-    throw new Error("Session is missing. Please sign in again.");
+function readStoredAuthBlob() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(SUPABASE_AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (_error) {
+    return null;
   }
-
-  const expiresAt = session.expires_at ? Number(session.expires_at) : 0;
-  const now = Math.floor(Date.now() / 1000);
-  if (expiresAt && expiresAt - now < 60) {
-    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-    if (refreshError || !refreshed?.session?.access_token) {
-      throw new Error("Session expired. Please sign in again.");
-    }
-  }
-
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError || !userData?.user?.id) {
-    throw new Error("Authentication is invalid. Please sign in again.");
-  }
-  return userData.user;
 }
 
-async function resolveCurrentUser(maxAttempts = 3) {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const { data: userData } = await supabase.auth.getUser();
-    if (userData?.user) return userData.user;
+function readStoredAccessToken() {
+  const blob = readStoredAuthBlob();
+  return blob?.access_token || blob?.currentSession?.access_token || null;
+}
 
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (sessionData?.session?.user) return sessionData.session.user;
-
-    await sleep(200 * (attempt + 1));
-  }
-  return null;
+function readStoredAuthUser() {
+  const blob = readStoredAuthBlob();
+  return blob?.user || blob?.currentSession?.user || null;
 }
 
 async function getCurrentActor() {
   if (shouldUseMock()) return { actorId: "mock-user", actorEmail: "mock@vetbridge.local" };
-  const user = await resolveCurrentUser();
-  return {
-    actorId: user?.id ?? null,
-    actorEmail: user?.email ?? null
-  };
+  const storedUser = readStoredAuthUser();
+  if (storedUser?.id) {
+    return { actorId: storedUser.id, actorEmail: storedUser.email ?? null };
+  }
+  // Fallback: ask supabase client (may be slower/locked).
+  try {
+    const { data } = await supabase.auth.getSession();
+    const sessionUser = data?.session?.user || null;
+    return {
+      actorId: sessionUser?.id ?? null,
+      actorEmail: sessionUser?.email ?? null
+    };
+  } catch (_error) {
+    return { actorId: null, actorEmail: null };
+  }
 }
 
 async function logAuditEvent({
@@ -87,7 +82,11 @@ async function logAuditEvent({
     return mapped;
   }
 
-  await supabase.from("audit_events").insert([event]);
+  try {
+    await restInsert("audit_events", [event], { returning: "minimal" });
+  } catch (_error) {
+    // Audit log must never block the main flow.
+  }
   return null;
 }
 
@@ -106,6 +105,87 @@ function normalizeCase(row) {
     submittedAt: row.submitted_at,
     report: row.report
   };
+}
+
+function toRestQueryValue(value) {
+  return encodeURIComponent(String(value ?? ""));
+}
+
+async function restInsert(table, rows, { returning = "minimal" } = {}) {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error("Supabase REST endpoint is not configured.");
+  }
+  const accessToken = readStoredAccessToken();
+  if (!accessToken) throw new Error("Local session is missing. Please sign in again.");
+  const endpoint = `${supabaseUrl}/rest/v1/${table}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Prefer: returning === "representation" ? "return=representation" : "return=minimal"
+    },
+    body: JSON.stringify(rows)
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Insert into ${table} failed (${response.status}): ${detail || "unknown error"}`);
+  }
+  if (returning === "representation") {
+    const data = await response.json();
+    return Array.isArray(data) ? data : [data];
+  }
+  return [];
+}
+
+async function restUpdate(table, patch, { match }) {
+  if (!supabaseUrl || !supabaseAnonKey || !match) {
+    throw new Error("Supabase REST update misconfigured.");
+  }
+  const accessToken = readStoredAccessToken();
+  if (!accessToken) throw new Error("Local session is missing. Please sign in again.");
+  const params = Object.entries(match).map(
+    ([column, value]) => `${column}=eq.${toRestQueryValue(value)}`
+  );
+  const endpoint = `${supabaseUrl}/rest/v1/${table}?${params.join("&")}`;
+  const response = await fetch(endpoint, {
+    method: "PATCH",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify(patch)
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Update on ${table} failed (${response.status}): ${detail || "unknown error"}`);
+  }
+  const data = await response.json();
+  return Array.isArray(data) ? data : [data];
+}
+
+async function listCasesByClinicIdWithSessionToken(clinicId, accessToken) {
+  if (!supabaseUrl || !supabaseAnonKey || !clinicId || !accessToken) return [];
+  const endpoint = `${supabaseUrl}/rest/v1/cases?select=*&clinic_id=eq.${toRestQueryValue(clinicId)}&order=submitted_at.desc`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json"
+    }
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Case query failed (${response.status}): ${detail || "unknown error"}`);
+  }
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(normalizeCase) : [];
 }
 
 function toCaseInsert(payload) {
@@ -139,8 +219,9 @@ export async function createCase(payload) {
     ...toCaseInsert(payload),
     clinic_id: resolvedClinicId
   };
-  const { data, error } = await supabase.from("cases").insert([insertPayload]).select().single();
-  if (error) throw error;
+  const inserted = await restInsert("cases", [insertPayload], { returning: "representation" });
+  const data = Array.isArray(inserted) ? inserted[0] : inserted;
+  if (!data) throw new Error("Case insert returned no row.");
   await logAuditEvent({
     eventType: "case_created",
     caseId: data.id,
@@ -151,47 +232,85 @@ export async function createCase(payload) {
   return normalizeCase(data);
 }
 
+async function listCasesViaRest({ filterColumn, filterValue } = {}) {
+  if (!supabaseUrl || !supabaseAnonKey) return [];
+  const accessToken = readStoredAccessToken();
+  if (!accessToken) throw new Error("Local session is missing. Please sign in again.");
+  const params = ["select=*", "order=submitted_at.desc"];
+  if (filterColumn && filterValue) {
+    params.push(`${filterColumn}=eq.${toRestQueryValue(filterValue)}`);
+  }
+  const endpoint = `${supabaseUrl}/rest/v1/cases?${params.join("&")}`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json"
+    }
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Case query failed (${response.status}): ${detail || "unknown error"}`);
+  }
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.map(normalizeCase) : [];
+}
+
 export async function listCases() {
   if (shouldUseMock()) return mockApi.listCases();
-  const { data, error } = await supabase.from("cases").select("*").order("submitted_at", { ascending: false });
-  if (error) throw error;
-  return (data || []).map(normalizeCase);
+  return listCasesViaRest();
+}
+
+export async function listReviewerCases(identity = {}) {
+  if (shouldUseMock()) return mockApi.listCases();
+  const storedUser = readStoredAuthUser();
+  const reviewerId = identity.reviewerId || storedUser?.id || null;
+  if (!reviewerId) return [];
+  return listCasesViaRest({ filterColumn: "reviewer_id", filterValue: reviewerId });
+}
+
+async function countCasesByClinicIdWithToken(clinicId, accessToken) {
+  if (!supabaseUrl || !supabaseAnonKey || !clinicId || !accessToken) return null;
+  const endpoint = `${supabaseUrl}/rest/v1/cases?select=id&clinic_id=eq.${toRestQueryValue(clinicId)}`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      Prefer: "count=exact"
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Case count failed (${response.status})`);
+  }
+  const contentRange = response.headers.get("content-range") || "";
+  const total = contentRange.includes("/") ? Number(contentRange.split("/").pop()) : null;
+  if (Number.isFinite(total)) return total;
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows.length : 0;
 }
 
 export async function listClinicCases(identity = {}) {
   if (shouldUseMock()) return mockApi.listCases();
-  await ensureActiveSession();
+  const accessToken = readStoredAccessToken();
+  const storedUser = readStoredAuthUser();
+  if (!accessToken) throw new Error("Local session is missing. Please sign in again.");
+
   const requestedClinicId = identity.clinicId || null;
   const requestedClinicEmail = identity.clinicEmail || null;
-  const actor = requestedClinicId || requestedClinicEmail ? null : await getCurrentActor();
-  const clinicId = requestedClinicId || actor?.actorId || null;
-  const clinicEmail = requestedClinicEmail || actor?.actorEmail || null;
+  const clinicId = requestedClinicId || storedUser?.id || null;
+  const clinicEmail = requestedClinicEmail || storedUser?.email || null;
   if (!clinicId && !clinicEmail) return [];
 
-  // Primary keying: clinic_id = auth.uid()
   if (clinicId) {
-    const { data, error } = await supabase
-      .from("cases")
-      .select("*")
-      .eq("clinic_id", clinicId)
-      .order("submitted_at", { ascending: false });
-    if (error) throw error;
-    if (!error && Array.isArray(data) && data.length > 0) {
-      return data.map(normalizeCase);
-    }
+    const byId = await listCasesByClinicIdWithSessionToken(clinicId, accessToken);
+    if (byId.length > 0) return byId;
   }
 
-  // Backward compatibility for rows saved with email-based clinic_id.
   if (clinicEmail) {
-    const { data, error } = await supabase
-      .from("cases")
-      .select("*")
-      .eq("clinic_id", clinicEmail)
-      .order("submitted_at", { ascending: false });
-    if (error) throw error;
-    if (!error && Array.isArray(data)) {
-      return data.map(normalizeCase);
-    }
+    return listCasesByClinicIdWithSessionToken(clinicEmail, accessToken);
   }
 
   return [];
@@ -212,42 +331,52 @@ export async function debugClinicCaseAccess(identity = {}) {
     };
   }
 
-  const { data: sessionData } = await supabase.auth.getSession();
-  const { data: userData } = await supabase.auth.getUser();
-  const sessionUser = userData?.user || sessionData?.session?.user || null;
-  const clinicId = identity.clinicId || sessionUser?.id || null;
-  const clinicEmail = identity.clinicEmail || sessionUser?.email || null;
+  const accessToken = readStoredAccessToken();
+  const storedUser = readStoredAuthUser();
+  const clinicId = identity.clinicId || storedUser?.id || null;
+  const clinicEmail = identity.clinicEmail || storedUser?.email || null;
 
   let idMatchCount = null;
   let emailMatchCount = null;
   let visibleCaseCount = null;
 
   if (clinicId) {
-    const { count } = await supabase
-      .from("cases")
-      .select("id", { count: "exact", head: true })
-      .eq("clinic_id", clinicId);
-    idMatchCount = count ?? 0;
+    idMatchCount = await countCasesByClinicIdWithToken(clinicId, accessToken);
   }
-
   if (clinicEmail) {
-    const { count } = await supabase
-      .from("cases")
-      .select("id", { count: "exact", head: true })
-      .eq("clinic_id", clinicEmail);
-    emailMatchCount = count ?? 0;
+    emailMatchCount = await countCasesByClinicIdWithToken(clinicEmail, accessToken);
   }
 
-  const { count: allVisibleCount } = await supabase.from("cases").select("id", { count: "exact", head: true });
-  visibleCaseCount = allVisibleCount ?? 0;
+  if (accessToken && supabaseUrl && supabaseAnonKey) {
+    const allEndpoint = `${supabaseUrl}/rest/v1/cases?select=id`;
+    const response = await fetch(allEndpoint, {
+      method: "GET",
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        Prefer: "count=exact"
+      }
+    });
+    if (response.ok) {
+      const contentRange = response.headers.get("content-range") || "";
+      const total = contentRange.includes("/") ? Number(contentRange.split("/").pop()) : null;
+      if (Number.isFinite(total)) {
+        visibleCaseCount = total;
+      } else {
+        const rows = await response.json();
+        visibleCaseCount = Array.isArray(rows) ? rows.length : 0;
+      }
+    }
+  }
 
   return {
-    mode: "supabase",
+    mode: "supabase-rest",
     hasSupabaseConfig,
     clinicId,
     clinicEmail,
-    sessionUserId: sessionUser?.id || null,
-    sessionUserEmail: sessionUser?.email || null,
+    sessionUserId: storedUser?.id || null,
+    sessionUserEmail: storedUser?.email || null,
     idMatchCount,
     emailMatchCount,
     visibleCaseCount
@@ -256,9 +385,9 @@ export async function debugClinicCaseAccess(identity = {}) {
 
 export async function getCase(caseId) {
   if (shouldUseMock()) return mockApi.getCase(caseId);
-  const { data, error } = await supabase.from("cases").select("*").eq("id", caseId).single();
-  if (error) return null;
-  return normalizeCase(data);
+  if (!caseId) return null;
+  const rows = await listCasesViaRest({ filterColumn: "id", filterValue: caseId });
+  return rows.length ? rows[0] : null;
 }
 
 export async function assignReviewer(caseId, reviewerId) {
@@ -310,22 +439,26 @@ export async function submitReport(caseId, reportPayload) {
   }
 
   const actor = await getCurrentActor();
-  const { data, error } = await supabase
-    .from("cases")
-    .update({ report: reportPayload, status: "Report Ready" })
-    .eq("id", caseId)
-    .select()
-    .single();
-  if (error) throw error;
+  const updatedRows = await restUpdate(
+    "cases",
+    { report: reportPayload, status: "Report Ready" },
+    { match: { id: caseId } }
+  );
+  const data = Array.isArray(updatedRows) ? updatedRows[0] : updatedRows;
+  if (!data) throw new Error("Failed to update case with submitted report.");
 
-  await supabase.from("submitted_reports").insert([
-    {
-      case_id: caseId,
-      reviewer_id: actor.actorId,
-      reviewer_email: actor.actorEmail,
-      report_snapshot: reportPayload
-    }
-  ]);
+  await restInsert(
+    "submitted_reports",
+    [
+      {
+        case_id: caseId,
+        reviewer_id: actor.actorId,
+        reviewer_email: actor.actorEmail,
+        report_snapshot: reportPayload
+      }
+    ],
+    { returning: "minimal" }
+  );
   await logAuditEvent({
     eventType: "report_submitted",
     caseId,
@@ -333,6 +466,17 @@ export async function submitReport(caseId, reportPayload) {
     actorEmail: actor.actorEmail,
     payload: { sections: Object.keys(reportPayload || {}) }
   });
+
+  try {
+    await enqueuePayoutForReportSubmission({
+      caseId,
+      reviewerId: actor.actorId,
+      reviewerEmail: actor.actorEmail
+    });
+  } catch (_payoutError) {
+    // Payout enqueue should never block report submission flow.
+  }
+
   return normalizeCase(data);
 }
 
@@ -462,14 +606,25 @@ export async function uploadCaseFiles(caseId, files, options = {}) {
 
 export async function listCaseFiles(caseId) {
   if (shouldUseMock()) return inMemoryCaseFiles.filter((file) => file.caseId === caseId);
-
-  const { data, error } = await supabase
-    .from("case_files")
-    .select("*")
-    .eq("case_id", caseId)
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data.map((row) => ({
+  if (!caseId) return [];
+  if (!supabaseUrl || !supabaseAnonKey) return [];
+  const accessToken = readStoredAccessToken();
+  if (!accessToken) return [];
+  const endpoint = `${supabaseUrl}/rest/v1/case_files?select=*&case_id=eq.${toRestQueryValue(
+    caseId
+  )}&order=created_at.desc`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json"
+    }
+  });
+  if (!response.ok) return [];
+  const rows = await response.json();
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row) => ({
     id: row.id,
     caseId: row.case_id,
     fileName: row.file_name,

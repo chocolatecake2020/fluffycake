@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { debugClinicCaseAccess, listClinicCases } from "../api/platformApi";
+import { listClinicCases } from "../api/platformApi";
+import { listPaidCaseIds } from "../api/paymentsApi";
 import DashboardHeader from "../components/common/DashboardHeader";
 import { useAuth } from "../context/AuthContext";
 import { clinicMenu } from "../constants/menus";
@@ -9,15 +10,15 @@ import CaseTable from "../features/cases/components/CaseTable";
 function ClinicDashboard() {
   const { loading, user } = useAuth();
   const [data, setData] = useState([]);
+  const [paidCaseIds, setPaidCaseIds] = useState(new Set());
   const [error, setError] = useState("");
-  const [debug, setDebug] = useState(null);
 
   useEffect(() => {
     if (loading) return;
     if (!user) {
       setData([]);
+      setPaidCaseIds(new Set());
       setError("");
-      setDebug(null);
       return;
     }
     let cancelled = false;
@@ -44,15 +45,11 @@ function ClinicDashboard() {
         setError(lastError);
       }
 
-      if (!cancelled && lastResult.length === 0) {
-        try {
-          const diagnostic = await debugClinicCaseAccess(identity);
-          if (!cancelled) setDebug(diagnostic);
-        } catch (_debugError) {
-          if (!cancelled) setDebug(null);
-        }
-      } else if (!cancelled) {
-        setDebug(null);
+      try {
+        const ids = await listPaidCaseIds();
+        if (!cancelled) setPaidCaseIds(ids);
+      } catch (_paidError) {
+        if (!cancelled) setPaidCaseIds(new Set());
       }
     };
 
@@ -73,14 +70,7 @@ function ClinicDashboard() {
           </Link>
         </div>
         {error && <p className="auth-meta">{error}</p>}
-        {!error && debug && (
-          <p className="auth-meta">
-            Debug: mode={debug.mode}, sessionUserId={debug.sessionUserId || "-"}, clinicId={debug.clinicId || "-"},
-            idMatch={debug.idMatchCount ?? "-"}, emailMatch={debug.emailMatchCount ?? "-"}, visibleCases=
-            {debug.visibleCaseCount ?? "-"}
-          </p>
-        )}
-        <CaseTable items={data} />
+        <CaseTable items={data} paidCaseIds={paidCaseIds} />
       </section>
     </main>
   );
