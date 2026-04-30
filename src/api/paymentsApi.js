@@ -209,11 +209,13 @@ export async function submitP2pConfirmation({ paymentId, caseId, transactionRefe
 
   const proofUrl = await uploadP2pProof(caseId, paymentId, proofFile);
 
-  return upsertP2pRow({
+  // Pilot UX: clinic submits TxID + screenshot -> auto-mark as paid and unlock report.
+  // Admin retains a Reject option to roll back disputed payments.
+  const result = await upsertP2pRow({
     payment_id: paymentId,
     method: P2P_METHOD,
     provider: P2P_PROVIDER,
-    status: P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION,
+    status: P2P_STATUSES.PAID,
     case_id: caseId,
     transaction_reference: transactionReference,
     reference: transactionReference,
@@ -221,10 +223,21 @@ export async function submitP2pConfirmation({ paymentId, caseId, transactionRefe
     raw_payload: {
       mode: "p2p",
       submittedAt: new Date().toISOString(),
+      autoApproved: true,
       transactionReference,
       proofUrl
     }
   });
+
+  if (caseId) {
+    try {
+      await recheckPayout(caseId);
+    } catch (_payoutError) {
+      // Payout queue refresh should never block the clinic flow.
+    }
+  }
+
+  return result;
 }
 
 // One-shot helper used by the clinic UI: ensures a payment record exists,
@@ -328,6 +341,23 @@ export async function listPendingP2pConfirmations() {
     .eq("method", P2P_METHOD)
     .eq("status", P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION)
     .order("created_at", { ascending: false });
+  if (error || !Array.isArray(data)) return [];
+  return data.map(normalizePaymentRow);
+}
+
+export async function listRecentP2pPayments({ limit = 50 } = {}) {
+  if (!useSupabaseStore) {
+    return Array.from(inMemoryPayments.values())
+      .filter((item) => item.method === P2P_METHOD)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+      .slice(0, limit);
+  }
+  const { data, error } = await supabase
+    .from("payment_transactions")
+    .select("*")
+    .eq("method", P2P_METHOD)
+    .order("created_at", { ascending: false })
+    .limit(limit);
   if (error || !Array.isArray(data)) return [];
   return data.map(normalizePaymentRow);
 }

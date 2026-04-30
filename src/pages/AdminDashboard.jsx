@@ -4,7 +4,7 @@ import {
   isP2pEnabled,
   isPlatformCheckoutEnabled,
   listPayouts,
-  listPendingP2pConfirmations
+  listRecentP2pPayments
 } from "../api/paymentsApi";
 import DashboardHeader from "../components/common/DashboardHeader";
 import { adminMenu } from "../constants/menus";
@@ -36,7 +36,7 @@ function AdminDashboard() {
 
   const refreshP2p = useCallback(async () => {
     try {
-      const list = await listPendingP2pConfirmations();
+      const list = await listRecentP2pPayments({ limit: 50 });
       setP2pPending(list);
     } catch (_error) {
       setP2pPending([]);

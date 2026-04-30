@@ -16,7 +16,7 @@ function StatusLine({ status, rejectionReason }) {
   if (!status) return <span className="status-pill status-pending">No payment yet</span>;
   const map = {
     [P2P_STATUSES.AWAITING_CLINIC_PAYMENT]: ["status-pending", "Awaiting clinic payment"],
-    [P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION]: ["status-processing", "Awaiting admin confirmation"],
+    [P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION]: ["status-processing", "Submitted"],
     [P2P_STATUSES.PAID]: ["status-paid", "Paid"],
     [P2P_STATUSES.REJECTED]: ["status-failed", "Rejected"]
   };
@@ -127,7 +127,7 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
       setTransactionRef("");
       setProofFile(null);
       await refreshPayment();
-      setMessage("Confirmation submitted. Admin will verify shortly.");
+      setMessage("Payment recorded. The report has been unlocked.");
     } catch (error) {
       setMessage(error?.message || "Failed to submit confirmation.");
     } finally {
@@ -166,8 +166,9 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
       <h3>Direct PayPal Settlement (Pilot)</h3>
       <p>
         For pilot cases, the clinic pays the reviewer directly via PayPal. Send the funds to the
-        reviewer's PayPal address, then attach the PayPal transaction ID and a receipt screenshot
-        below. The admin will verify and unlock the report.
+        reviewer's PayPal address, attach the PayPal transaction ID and a receipt screenshot, and
+        the report will be unlocked immediately. (The admin retains the right to flag a payment
+        as disputed if the proof is later found invalid.)
       </p>
 
       <div className="grid two">
@@ -283,9 +284,15 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
             </p>
           )}
           {paid ? (
-            <p>Payment verified. The report is now unlocked.</p>
+            <p>Payment recorded. The report is now unlocked.</p>
+          ) : status === P2P_STATUSES.REJECTED ? (
+            <p>
+              This payment was flagged as disputed by the admin
+              {payment?.rejectionReason ? `: ${payment.rejectionReason}` : ""}. Please contact
+              the admin or resubmit a corrected proof.
+            </p>
           ) : (
-            <p>Confirmation received. Awaiting admin verification.</p>
+            <p>Confirmation received. Awaiting verification.</p>
           )}
         </div>
       )}
