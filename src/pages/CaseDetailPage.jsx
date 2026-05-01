@@ -83,13 +83,20 @@ function CaseDetailPage() {
 
   // Edit / Delete are only offered to the owning clinic before the case has
   // progressed past "Submitted". Once a reviewer opens or submits the report,
-  // the clinic can no longer mutate the source data.
+  // the clinic can no longer mutate the source data. We also accept admin so
+  // an admin can clean up on the clinic's behalf if needed.
+  const norm = (value) => String(value ?? "").trim().toLowerCase();
+  const role = norm(profile?.role);
+  const isClinicRole = role === "clinic" || role === ""; // role missing -> assume clinic for legacy accounts
+  const isAdminRole = role === "admin";
   const isOwnerClinic = (() => {
-    if (profile?.role !== "clinic" || !item?.clinicId) return false;
+    if (!item?.clinicId) return false;
+    if (isAdminRole) return true;
+    if (!isClinicRole) return false;
     const candidates = [user?.id, profile?.id, user?.email, profile?.email]
-      .filter(Boolean)
-      .map((value) => String(value));
-    return candidates.includes(String(item.clinicId));
+      .map(norm)
+      .filter(Boolean);
+    return candidates.includes(norm(item.clinicId));
   })();
   const canEditOrDelete = isOwnerClinic && item?.status === "Submitted";
 
@@ -157,6 +164,11 @@ function CaseDetailPage() {
         {isOwnerClinic && !canEditOrDelete && item?.status && item.status !== "Submitted" && (
           <p className="auth-meta">
             Edit/Delete is disabled because this case is in "{item.status}" state.
+          </p>
+        )}
+        {!isOwnerClinic && (isClinicRole || isAdminRole) && (
+          <p className="auth-meta">
+            Edit/Delete hidden: ownership check did not match. Debug -&gt; role:{role || "(empty)"} | user.id:{user?.id || "?"} | clinic_id:{item?.clinicId || "?"}
           </p>
         )}
         {deleteError && <p className="auth-meta" style={{ color: "#8b1f15" }}>{deleteError}</p>}
