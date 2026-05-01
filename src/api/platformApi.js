@@ -599,6 +599,45 @@ export async function submitReport(caseId, reportPayload) {
   return normalizeCase(data);
 }
 
+// Reviewer-side report deletion. Allowed only when the case has not been paid
+// for yet (clients should check first; RLS still enforces author/admin scope).
+// Effects:
+//   - Clears cases.report and rolls cases.status back to "Submitted"
+//   - Removes submitted_reports rows authored by the current reviewer for the case
+//   - Leaves audit_events intact for traceability
+export async function deleteReport(caseId) {
+  if (!caseId) throw new Error("Case id is required.");
+  if (shouldUseMock()) {
+    return mockApi.deleteReport ? mockApi.deleteReport(caseId) : null;
+  }
+  const actor = await getCurrentActor();
+  if (!actor?.actorId) {
+    throw new Error("Authenticated reviewer identity is unavailable. Please sign in again.");
+  }
+
+  // Roll the case back to Submitted and clear the cached report jsonb.
+  await restUpdate(
+    "cases",
+    { report: null, status: "Submitted" },
+    { match: { id: caseId } }
+  );
+
+  // Drop submitted_reports rows authored by this reviewer for the case.
+  await restDelete("submitted_reports", {
+    match: { case_id: caseId, reviewer_id: actor.actorId }
+  });
+
+  await logAuditEvent({
+    eventType: "report_deleted",
+    caseId,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    payload: {}
+  });
+
+  return { caseId, deleted: true };
+}
+
 export async function requestMoreInfo(caseId, message) {
   if (shouldUseMock()) return mockApi.requestMoreInfo(caseId, message);
   const actor = await getCurrentActor();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   deleteCase,
+  deleteReport,
   getCase,
   getUserProfileById,
   listCaseFiles,
@@ -33,6 +34,8 @@ function CaseDetailPage() {
   const [reviewerProfile, setReviewerProfile] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [deletingReport, setDeletingReport] = useState(false);
+  const [reportError, setReportError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +117,33 @@ function CaseDetailPage() {
     } catch (error) {
       setDeleteError(error?.message || "Failed to delete the case.");
       setDeleting(false);
+    }
+  };
+
+  // Report-level Edit/Delete is offered only when the current reviewer authored
+  // the report and the clinic has not yet paid. After payment the report becomes
+  // immutable so the clinic can rely on what they paid for.
+  const isReportAuthor =
+    role === "reviewer"
+      && item?.reviewerId
+      && user?.id
+      && String(item.reviewerId) === String(user.id);
+  const canEditOrDeleteReport = Boolean(isReportAuthor && item?.report && !paid);
+
+  const handleDeleteReport = async () => {
+    if (!item) return;
+    const confirmed = window.confirm(
+      "Delete this submitted report? The case will move back to \"Submitted\" so you can rewrite a new one. This cannot be undone."
+    );
+    if (!confirmed) return;
+    setDeletingReport(true);
+    setReportError("");
+    try {
+      await deleteReport(item.id);
+      navigate("/reviewer");
+    } catch (error) {
+      setReportError(error?.message || "Failed to delete the report.");
+      setDeletingReport(false);
     }
   };
 
@@ -233,10 +263,34 @@ function CaseDetailPage() {
       </section>
       <P2pPaymentPanel caseItem={item} role={profile?.role} onPaymentChanged={handlePaymentChanged} />
       <section className="card" id="report">
-        <h3>Report</h3>
+        <div className="row between">
+          <h3 style={{ margin: 0 }}>Report</h3>
+          {canEditOrDeleteReport && (
+            <div className="row" style={{ gap: 8 }}>
+              <Link className="btn small" to={`/reviewer/report/${item.id}`}>
+                Edit Report
+              </Link>
+              <button
+                className="btn small"
+                type="button"
+                onClick={handleDeleteReport}
+                disabled={deletingReport}
+                style={{ borderColor: "#8b1f15", color: "#8b1f15" }}
+              >
+                {deletingReport ? "Deleting..." : "Delete Report"}
+              </button>
+            </div>
+          )}
+        </div>
+        {isReportAuthor && item?.report && paid && (
+          <p className="auth-meta">
+            This report is locked because the clinic has paid for it. Contact the admin if a correction is required.
+          </p>
+        )}
+        {reportError && <p className="auth-meta" style={{ color: "#8b1f15" }}>{reportError}</p>}
         {(() => {
-          const role = profile?.role;
-          const reviewerCanView = role === "reviewer" || role === "admin";
+          const innerRole = profile?.role;
+          const reviewerCanView = innerRole === "reviewer" || innerRole === "admin";
           const canViewReport = reviewerCanView || paid;
 
           if (!item.report) {

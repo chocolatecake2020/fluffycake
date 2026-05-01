@@ -1,7 +1,31 @@
 import { Link } from "react-router-dom";
 import StatusBadge from "../../../components/common/StatusBadge";
 
-function AssignedCaseTable({ items }) {
+function ActionCell({ item, currentUserId }) {
+  const status = item.status;
+  const isAuthor = currentUserId && item.reviewerId && String(item.reviewerId) === String(currentUserId);
+
+  if (status === "Submitted") {
+    return <Link to={`/reviewer/report/${item.id}`}>Write Report</Link>;
+  }
+
+  if (status === "Report Ready") {
+    if (isAuthor) {
+      return (
+        <Link to={`/cases/${item.id}`}>
+          View / Edit
+        </Link>
+      );
+    }
+    return <Link to={`/cases/${item.id}`}>View Case</Link>;
+  }
+
+  // For other statuses (Under Review, Completed, Needs More Information, Draft, etc.)
+  // a plain detail view is the safest default.
+  return <Link to={`/cases/${item.id}`}>Open</Link>;
+}
+
+function AssignedCaseTable({ items, currentUserId }) {
   return (
     <table>
       <thead>
@@ -21,7 +45,7 @@ function AssignedCaseTable({ items }) {
               <StatusBadge status={item.status} />
             </td>
             <td>
-              <Link to={`/reviewer/report/${item.id}`}>Write Report</Link>
+              <ActionCell item={item} currentUserId={currentUserId} />
             </td>
           </tr>
         ))}

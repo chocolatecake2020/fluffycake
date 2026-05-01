@@ -69,6 +69,15 @@ export async function submitReport(caseId, reportPayload = reportTemplate) {
   return inMemoryCases.find((c) => c.id === caseId);
 }
 
+export async function deleteReport(caseId) {
+  await wait();
+  ensureSeedCases();
+  inMemoryCases = inMemoryCases.map((c) =>
+    c.id === caseId ? { ...c, status: "Submitted", report: null } : c
+  );
+  return { caseId, deleted: true };
+}
+
 export async function requestMoreInfo(caseId, message) {
   await wait();
   ensureSeedCases();

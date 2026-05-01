@@ -61,7 +61,7 @@ function ReviewerDashboard() {
       <section className="card">
         <h3>Cases</h3>
         {error && <p className="auth-meta">{error}</p>}
-        <AssignedCaseTable items={caseList} />
+        <AssignedCaseTable items={caseList} currentUserId={user?.id} />
       </section>
       <section className="grid two">
         {reviewerList.map((reviewer) => (
