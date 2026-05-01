@@ -166,11 +166,6 @@ function CaseDetailPage() {
             Edit/Delete is disabled because this case is in "{item.status}" state.
           </p>
         )}
-        {!isOwnerClinic && (isClinicRole || isAdminRole) && (
-          <p className="auth-meta">
-            Edit/Delete hidden: ownership check did not match. Debug -&gt; role:{role || "(empty)"} | user.id:{user?.id || "?"} | clinic_id:{item?.clinicId || "?"}
-          </p>
-        )}
         {deleteError && <p className="auth-meta" style={{ color: "#8b1f15" }}>{deleteError}</p>}
         <div className="grid two" style={{ marginTop: 12 }}>
           <Info label="Patient information" value={`${item.patientName} / ${item.species}`} />
