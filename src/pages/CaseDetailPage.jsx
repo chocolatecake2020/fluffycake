@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { getCase, getUserProfileById, listCaseFiles, listClinicCases } from "../api/platformApi";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  deleteCase,
+  getCase,
+  getUserProfileById,
+  listCaseFiles,
+  listClinicCases
+} from "../api/platformApi";
 import {
   getPaymentForCase,
   isP2pEnabled,
@@ -18,12 +24,15 @@ function isImageFile(file) {
 
 function CaseDetailPage() {
   const { caseId } = useParams();
-  const { profile } = useAuth();
+  const navigate = useNavigate();
+  const { profile, user } = useAuth();
   const [item, setItem] = useState(null);
   const [files, setFiles] = useState([]);
   const [paid, setPaid] = useState(false);
   const [loading, setLoading] = useState(true);
   const [reviewerProfile, setReviewerProfile] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +81,35 @@ function CaseDetailPage() {
     setPaid(isPaymentPaid(payment));
   }, []);
 
+  // Edit / Delete are only offered to the owning clinic before the case has
+  // progressed past "Submitted". Once a reviewer opens or submits the report,
+  // the clinic can no longer mutate the source data.
+  const isOwnerClinic = (() => {
+    if (profile?.role !== "clinic" || !item?.clinicId) return false;
+    const candidates = [user?.id, profile?.id, user?.email, profile?.email]
+      .filter(Boolean)
+      .map((value) => String(value));
+    return candidates.includes(String(item.clinicId));
+  })();
+  const canEditOrDelete = isOwnerClinic && item?.status === "Submitted";
+
+  const handleDelete = async () => {
+    if (!item) return;
+    const confirmed = window.confirm(
+      "Delete this case? Attached files and audit references will be removed. This cannot be undone."
+    );
+    if (!confirmed) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await deleteCase(item.id);
+      navigate("/clinic");
+    } catch (error) {
+      setDeleteError(error?.message || "Failed to delete the case.");
+      setDeleting(false);
+    }
+  };
+
   if (loading) {
     return (
       <main className="container">
@@ -97,8 +135,32 @@ function CaseDetailPage() {
   return (
     <main className="container">
       <section className="card">
-        <h2>{item.title}</h2>
-        <div className="grid two">
+        <div className="row between">
+          <h2 style={{ margin: 0 }}>{item.title}</h2>
+          {canEditOrDelete && (
+            <div className="row" style={{ gap: 8 }}>
+              <Link className="btn small" to={`/clinic/cases/${item.id}/edit`}>
+                Edit
+              </Link>
+              <button
+                className="btn small"
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                style={{ borderColor: "#8b1f15", color: "#8b1f15" }}
+              >
+                {deleting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          )}
+        </div>
+        {isOwnerClinic && !canEditOrDelete && item?.status && item.status !== "Submitted" && (
+          <p className="auth-meta">
+            Edit/Delete is disabled because this case is in "{item.status}" state.
+          </p>
+        )}
+        {deleteError && <p className="auth-meta" style={{ color: "#8b1f15" }}>{deleteError}</p>}
+        <div className="grid two" style={{ marginTop: 12 }}>
           <Info label="Patient information" value={`${item.patientName} / ${item.species}`} />
           <Info label="Clinic information" value={item.clinicId ?? "Assigned clinic"} />
           <Info label="Clinical question" value={item.complaint} />

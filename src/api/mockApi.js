@@ -44,6 +44,22 @@ export async function assignReviewer(caseId, reviewerId) {
   return inMemoryCases.find((c) => c.id === caseId);
 }
 
+export async function updateCase(caseId, payload = {}) {
+  await wait();
+  ensureSeedCases();
+  inMemoryCases = inMemoryCases.map((c) =>
+    c.id === caseId ? { ...c, ...payload } : c
+  );
+  return inMemoryCases.find((c) => c.id === caseId);
+}
+
+export async function deleteCase(caseId) {
+  await wait();
+  ensureSeedCases();
+  inMemoryCases = inMemoryCases.filter((c) => c.id !== caseId);
+  return { id: caseId, deleted: true };
+}
+
 export async function submitReport(caseId, reportPayload = reportTemplate) {
   await wait();
   ensureSeedCases();

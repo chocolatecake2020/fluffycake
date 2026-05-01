@@ -96,7 +96,13 @@ function normalizeCase(row) {
     title: row.title,
     patientName: row.patient_name,
     species: row.species,
+    breed: row.breed,
+    age: row.age,
+    sex: row.sex,
+    weight: row.weight,
     complaint: row.complaint,
+    history: row.clinical_history,
+    medication: row.current_medication,
     reviewType: row.review_type,
     priority: row.priority,
     status: row.status,
@@ -169,6 +175,31 @@ async function restUpdate(table, patch, { match }) {
   return Array.isArray(data) ? data : [data];
 }
 
+async function restDelete(table, { match }) {
+  if (!supabaseUrl || !supabaseAnonKey || !match) {
+    throw new Error("Supabase REST delete misconfigured.");
+  }
+  const accessToken = readStoredAccessToken();
+  if (!accessToken) throw new Error("Local session is missing. Please sign in again.");
+  const params = Object.entries(match).map(
+    ([column, value]) => `${column}=eq.${toRestQueryValue(value)}`
+  );
+  const endpoint = `${supabaseUrl}/rest/v1/${table}?${params.join("&")}`;
+  const response = await fetch(endpoint, {
+    method: "DELETE",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      Prefer: "return=minimal"
+    }
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Delete on ${table} failed (${response.status}): ${detail || "unknown error"}`);
+  }
+}
+
 async function listCasesByClinicIdWithSessionToken(clinicId, accessToken) {
   if (!supabaseUrl || !supabaseAnonKey || !clinicId || !accessToken) return [];
   const endpoint = `${supabaseUrl}/rest/v1/cases?select=*&clinic_id=eq.${toRestQueryValue(clinicId)}&order=submitted_at.desc`;
@@ -230,6 +261,67 @@ export async function createCase(payload) {
     payload: { reviewType: data.review_type, priority: data.priority }
   });
   return normalizeCase(data);
+}
+
+// Build a column patch from form payload, dropping undefined values so we never
+// overwrite columns the caller did not intend to change.
+function toCaseUpdate(payload = {}) {
+  const mapping = {
+    title: payload.title,
+    patient_name: payload.patientName,
+    species: payload.species,
+    breed: payload.breed,
+    age: payload.age,
+    sex: payload.sex,
+    weight: payload.weight,
+    complaint: payload.complaint,
+    clinical_history: payload.history,
+    current_medication: payload.medication,
+    review_type: payload.reviewType,
+    priority: payload.priority
+  };
+  return Object.fromEntries(
+    Object.entries(mapping).filter(([, value]) => value !== undefined)
+  );
+}
+
+export async function updateCase(caseId, payload) {
+  if (!caseId) throw new Error("Case id is required.");
+  if (shouldUseMock()) return mockApi.updateCase ? mockApi.updateCase(caseId, payload) : null;
+
+  const actor = await getCurrentActor();
+  const patch = toCaseUpdate(payload);
+  if (!Object.keys(patch).length) {
+    throw new Error("No editable fields were provided.");
+  }
+  const updated = await restUpdate("cases", patch, { match: { id: caseId } });
+  const data = Array.isArray(updated) ? updated[0] : updated;
+  if (!data) throw new Error("Case update returned no row. The case may no longer exist.");
+  await logAuditEvent({
+    eventType: "case_updated",
+    caseId: data.id,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    payload: { fieldsChanged: Object.keys(patch) }
+  });
+  return normalizeCase(data);
+}
+
+export async function deleteCase(caseId) {
+  if (!caseId) throw new Error("Case id is required.");
+  if (shouldUseMock()) return mockApi.deleteCase ? mockApi.deleteCase(caseId) : null;
+
+  const actor = await getCurrentActor();
+  // Audit before delete so the row id is still resolvable in logs.
+  await logAuditEvent({
+    eventType: "case_deleted",
+    caseId,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    payload: {}
+  });
+  await restDelete("cases", { match: { id: caseId } });
+  return { id: caseId, deleted: true };
 }
 
 async function listCasesViaRest({ filterColumn, filterValue } = {}) {

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { createCase, uploadCaseFiles } from "../api/platformApi";
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { createCase, getCase, updateCase, uploadCaseFiles } from "../api/platformApi";
 import DashboardHeader from "../components/common/DashboardHeader";
 import Field from "../components/common/Field";
 import { clinicMenu } from "../constants/menus";
@@ -53,6 +53,8 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
 
 function NewCasePage() {
   const navigate = useNavigate();
+  const { caseId } = useParams();
+  const isEditMode = Boolean(caseId);
   const { user, profile } = useAuth();
   const [form, setForm] = useState({
     patientName: "",
@@ -72,6 +74,57 @@ function NewCasePage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [uploadProgress, setUploadProgress] = useState(null);
+  const [loadingCase, setLoadingCase] = useState(isEditMode);
+  const [editLocked, setEditLocked] = useState(false);
+
+  useEffect(() => {
+    if (!isEditMode) return;
+    let cancelled = false;
+    const load = async () => {
+      setLoadingCase(true);
+      setError("");
+      try {
+        const existing = await getCase(caseId);
+        if (cancelled) return;
+        if (!existing) {
+          setError("Case not found, or you no longer have access to it.");
+          return;
+        }
+        // Edit is only safe before the case has progressed beyond Submitted.
+        if (existing.status && existing.status !== "Submitted") {
+          setEditLocked(true);
+          setError(
+            `This case is in "${existing.status}" state and can no longer be edited. Open the case detail page instead.`
+          );
+        }
+        setForm((prev) => ({
+          ...prev,
+          title: existing.title ?? prev.title,
+          patientName: existing.patientName ?? "",
+          species: existing.species ?? prev.species,
+          breed: existing.breed ?? "",
+          age: existing.age ?? "",
+          sex: existing.sex ?? "",
+          weight: existing.weight ?? "",
+          complaint: existing.complaint ?? "",
+          history: existing.history ?? "",
+          medication: existing.medication ?? "",
+          reviewType: existing.reviewType ?? prev.reviewType,
+          priority: existing.priority ?? prev.priority
+        }));
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError.message || "Failed to load case for editing.");
+        }
+      } finally {
+        if (!cancelled) setLoadingCase(false);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, caseId]);
 
   const onChange = (e) => setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   const onFilesChange = (e) => {
@@ -88,19 +141,32 @@ function NewCasePage() {
 
   const onSubmit = async (e) => {
     e.preventDefault();
+    if (editLocked) return;
     setSubmitting(true);
     setError("");
-    setUploadProgress("Creating case record...");
+    setUploadProgress(isEditMode ? "Updating case record..." : "Creating case record...");
     try {
-      const clinicId = user?.id || profile?.id || user?.email || profile?.email || "clinic-local";
-      const created = await withTimeout(
-        createCase({ ...form, clinicId }),
-        15000,
-        "Case creation timed out. Please retry in a few seconds."
-      );
+      let resolvedCaseId = caseId;
+      if (isEditMode) {
+        const updated = await withTimeout(
+          updateCase(caseId, form),
+          15000,
+          "Case update timed out. Please retry in a few seconds."
+        );
+        resolvedCaseId = updated?.id || caseId;
+      } else {
+        const clinicId =
+          user?.id || profile?.id || user?.email || profile?.email || "clinic-local";
+        const created = await withTimeout(
+          createCase({ ...form, clinicId }),
+          15000,
+          "Case creation timed out. Please retry in a few seconds."
+        );
+        resolvedCaseId = created.id;
+      }
       if (files.length) {
         await withTimeout(
-          uploadCaseFiles(created.id, files, {
+          uploadCaseFiles(resolvedCaseId, files, {
             onProgress: ({ uploaded, total, percent }) =>
               setUploadProgress(`Uploading files: ${uploaded}/${total} (${percent}%)`)
           }),
@@ -108,18 +174,36 @@ function NewCasePage() {
           "File upload timed out. Try submitting again with fewer/smaller files."
         );
       }
-      navigate(`/cases/${created.id}`);
+      navigate(`/cases/${resolvedCaseId}`);
     } catch (submitError) {
-      setError(submitError.message || "Failed to submit case.");
+      setError(submitError.message || (isEditMode ? "Failed to update case." : "Failed to submit case."));
     } finally {
       setSubmitting(false);
       setUploadProgress(null);
     }
   };
 
+  if (isEditMode && loadingCase) {
+    return (
+      <main className="container">
+        <DashboardHeader title="Edit Case" menu={clinicMenu} />
+        <section className="card">Loading case...</section>
+      </main>
+    );
+  }
+
+  const headerTitle = isEditMode ? "Edit Case" : "New Case Submission";
+  const submitLabel = isEditMode
+    ? submitting
+      ? "Saving..."
+      : "Save Changes"
+    : submitting
+      ? "Submitting..."
+      : "Submit Case";
+
   return (
     <main className="container">
-      <DashboardHeader title="New Case Submission" menu={clinicMenu} />
+      <DashboardHeader title={headerTitle} menu={clinicMenu} />
       <form className="card form-grid" onSubmit={onSubmit}>
         <Field label="Patient name" name="patientName" value={form.patientName} onChange={onChange} required />
         <Field label="Species" name="species" value={form.species} onChange={onChange} select options={["dog", "cat", "exotic", "other"]} />
@@ -147,18 +231,21 @@ function NewCasePage() {
         />
         <Field label="Priority" name="priority" value={form.priority} onChange={onChange} select options={["Standard", "Urgent", "Overnight"]} />
         <div>
-          <label>Files upload</label>
+          <label>{isEditMode ? "Add additional files (optional)" : "Files upload"}</label>
           <input type="file" multiple onChange={onFilesChange} />
           <small>X-ray, Ultrasound, CT/MRI, Photos, Lab results, Referral note</small>
           <small>Allowed: {ALLOWED_EXTENSIONS.join(", ")} / Max {MAX_FILE_SIZE_MB}MB each</small>
+          {isEditMode && (
+            <small>Existing files remain attached. Selecting new files appends them.</small>
+          )}
           {files.length > 0 && <small>{files.length} file(s) selected</small>}
         </div>
         <div className="full warning-box">
           This service provides veterinary case review support and does not replace the primary veterinarian&apos;s
           clinical judgment.
         </div>
-        <button className="btn primary full" type="submit" disabled={submitting}>
-          {submitting ? "Submitting..." : "Submit Case"}
+        <button className="btn primary full" type="submit" disabled={submitting || editLocked}>
+          {submitLabel}
         </button>
         {uploadProgress && <p className="full auth-meta">{uploadProgress}</p>}
         {error && <p className="full auth-meta">{error}</p>}

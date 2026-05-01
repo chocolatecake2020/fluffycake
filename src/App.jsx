@@ -40,6 +40,14 @@ function App() {
           }
         />
         <Route
+          path="/clinic/cases/:caseId/edit"
+          element={
+            <ProtectedRoute requiredRole="clinic">
+              <NewCasePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/cases/:caseId"
           element={
             <ProtectedRoute>
