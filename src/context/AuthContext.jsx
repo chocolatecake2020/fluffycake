@@ -274,6 +274,38 @@ function AuthProvider({ children }) {
         }
         return refreshed;
       },
+      async updateDisplayName(displayName) {
+        if (!session?.user?.id) {
+          throw new Error("Sign in is required to update display name.");
+        }
+        const userId = session.user.id;
+        const trimmed = (displayName || "").trim();
+        // Mirror the payout email path: REST first, then JS client fallback.
+        let updated = null;
+        try {
+          updated = await updateMyUserProfile(userId, { full_name: trimmed });
+        } catch (restError) {
+          if (!supabase) throw restError;
+          const { error } = await supabase
+            .from("user_profiles")
+            .update({ full_name: trimmed })
+            .eq("id", userId);
+          if (error) throw error;
+        }
+        let refreshed = updated;
+        if (!refreshed) {
+          refreshed = await getUserProfileById(userId).catch(() => null);
+        }
+        if (!refreshed && supabase) {
+          refreshed = await getProfile(userId).catch(() => null);
+        }
+        if (refreshed) {
+          setProfile(refreshed);
+        } else {
+          setProfile((prev) => (prev ? { ...prev, full_name: trimmed } : prev));
+        }
+        return refreshed;
+      },
       async signOut() {
         setSession(null);
         setProfile(null);
