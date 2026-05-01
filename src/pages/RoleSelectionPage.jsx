@@ -22,7 +22,18 @@ function RoleSelectionPage() {
   const [message, setMessage] = useState("");
   const canSignupAdmin = adminEmailWhitelist.includes((form.email || "").trim().toLowerCase());
 
-  const onChange = (e) => setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  const onChange = (e) => {
+    const { name, value } = e.target;
+    setForm((prev) => {
+      const next = { ...prev, [name]: value };
+      // Convenience: auto-mirror account email into PayPal email while it has not
+      // been edited explicitly. Users can still override the PayPal email after.
+      if (name === "email" && !prev.paypalEmail) {
+        next.paypalEmail = value;
+      }
+      return next;
+    });
+  };
 
   const handleSignIn = async () => {
     setLoading(true);
@@ -70,8 +81,8 @@ function RoleSelectionPage() {
         setMessage("This email is not allowed for admin signup.");
         return;
       }
-      if (form.signupRole === "reviewer" && !form.paypalEmail.trim()) {
-        setMessage("PayPal email is required for reviewer payouts.");
+      if (!form.paypalEmail.trim()) {
+        setMessage("PayPal email is required so reviewer payouts and clinic refunds can be routed correctly.");
         return;
       }
       await signUp({
@@ -157,18 +168,20 @@ function RoleSelectionPage() {
                 {canSignupAdmin && <option value="admin">Admin</option>}
               </select>
             </div>
-            {form.signupRole === "reviewer" && (
-              <div>
-                <label>PayPal Email (for reviewer payouts)</label>
-                <input
-                  name="paypalEmail"
-                  type="email"
-                  value={form.paypalEmail}
-                  onChange={onChange}
-                  placeholder="reviewer@paypal.com"
-                />
-              </div>
-            )}
+            <div>
+              <label>PayPal Email (required for signup)</label>
+              <input
+                name="paypalEmail"
+                type="email"
+                value={form.paypalEmail}
+                onChange={onChange}
+                placeholder="same as your account email"
+              />
+              <small style={{ display: "block", marginTop: 4 }}>
+                Tip: use the same email as your account login to avoid confusion. Reviewers receive
+                payouts here; clinics use it for refunds and receipts.
+              </small>
+            </div>
             <div className="row full">
               <button className="btn primary" onClick={handleSignIn} disabled={loading}>
                 {loading ? "Working..." : "Sign In"}
