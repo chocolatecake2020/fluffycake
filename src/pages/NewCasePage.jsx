@@ -357,9 +357,9 @@ function NewCasePage() {
         <Field label="Current medication" name="medication" value={form.medication} onChange={onChange} textarea />
         <div className="full">
           <label>Prior diagnostics / AI output</label>
-          <div className="form-grid" style={{ gridTemplateColumns: "1fr", gap: "0.35rem", marginTop: "0.35rem" }}>
+          <div className="prior-ai-options">
             {Object.entries(PRIOR_AI_LABELS).map(([value, label]) => (
-              <label key={value} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 400 }}>
+              <label key={value} className="prior-ai-option">
                 <input
                   type="radio"
                   name="priorAiSource"
@@ -367,7 +367,7 @@ function NewCasePage() {
                   checked={form.priorAiSource === value}
                   onChange={onChange}
                 />
-                {label}
+                <span>{label}</span>
               </label>
             ))}
           </div>
