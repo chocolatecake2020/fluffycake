@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getUserProfileById } from "../../../api/platformApi";
 import {
+  FIRST_FREE_METHOD,
   P2P_METHOD,
   P2P_STATUSES,
   PAYPAL_SEND_MONEY_URL,
@@ -151,6 +152,7 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
 
   const status = payment?.method === P2P_METHOD ? payment?.status : null;
   const paid = isPaymentPaid(payment);
+  const firstCaseFreeApplied = payment?.method === FIRST_FREE_METHOD && paid;
   const reviewerEmail = reviewerProfile?.paypal_email || payment?.paypalRecipientEmail;
   const reviewerLoginEmail = reviewerProfile?.email || null;
   const reviewerName = reviewerProfile?.full_name || null;
@@ -172,6 +174,11 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
   return (
     <section className="card" id="payment">
       <h3>Direct PayPal Settlement (Pilot)</h3>
+      {firstCaseFreeApplied && (
+        <div className="warning-box" style={{ marginBottom: 12 }}>
+          First case free credit applied for this clinic. No payment is required for this case.
+        </div>
+      )}
       <p>
         For pilot cases, the clinic pays the reviewer directly via PayPal. Send the funds to the
         reviewer's PayPal address, attach the PayPal transaction ID and a receipt screenshot, and
@@ -225,7 +232,7 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
         </div>
       )}
 
-      {isClinic && reviewerEmail && !alreadySubmitted && (
+      {isClinic && reviewerEmail && !alreadySubmitted && !firstCaseFreeApplied && (
         <>
           <div className="card" style={{ marginTop: 12 }}>
             <strong>Step 1. Send the payment via PayPal</strong>
@@ -301,7 +308,7 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
         </>
       )}
 
-      {alreadySubmitted && (
+      {(alreadySubmitted || firstCaseFreeApplied) && (
         <div className="card" style={{ marginTop: 12 }}>
           {payment?.transactionReference && (
             <p className="auth-meta">PayPal Tx ID: <code>{payment.transactionReference}</code></p>
@@ -311,7 +318,9 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
               Proof: <a href={payment.proofUrl} target="_blank" rel="noreferrer">view screenshot</a>
             </p>
           )}
-          {paid ? (
+          {firstCaseFreeApplied ? (
+            <p>First case free credit is applied. The report is unlocked without payment.</p>
+          ) : paid ? (
             <p>Payment recorded. The report is now unlocked.</p>
           ) : status === P2P_STATUSES.REJECTED ? (
             <p>

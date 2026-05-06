@@ -44,6 +44,8 @@ export const P2P_STATUSES = Object.freeze({
 
 export const P2P_PROVIDER = "PayPal (Direct P2P)";
 export const P2P_METHOD = "p2p_paypal";
+export const FIRST_FREE_METHOD = "first_case_free";
+export const FIRST_FREE_PROVIDER = "VetBridge First Case Promo";
 
 const methodCatalog = [
   {
@@ -473,6 +475,87 @@ const PAID_STATUSES = new Set(["paid", "succeeded", "completed", "confirmed", "a
 export function isPaymentPaid(payment) {
   if (!payment?.status) return false;
   return PAID_STATUSES.has(String(payment.status).toLowerCase());
+}
+
+export async function claimFirstFreeCase({ caseId, clinicId } = {}) {
+  if (!caseId || !clinicId) return { applied: false, reason: "missing_identifiers" };
+
+  const existingCasePayment = await getPaymentForCase(caseId);
+  if (isPaymentPaid(existingCasePayment)) {
+    return {
+      applied: existingCasePayment?.method === FIRST_FREE_METHOD,
+      reason: existingCasePayment?.method === FIRST_FREE_METHOD ? "already_applied_on_case" : "already_paid"
+    };
+  }
+
+  if (!useSupabaseStore) {
+    const alreadyConsumed = Array.from(inMemoryPayments.values()).some(
+      (payment) => payment?.method === FIRST_FREE_METHOD && isPaymentPaid(payment)
+    );
+    if (alreadyConsumed) return { applied: false, reason: "already_consumed" };
+    const freePayment = {
+      paymentId: `free_${caseId}`,
+      method: FIRST_FREE_METHOD,
+      provider: FIRST_FREE_PROVIDER,
+      status: "paid",
+      amount: 0,
+      currency: "USD",
+      caseId,
+      createdAt: new Date().toISOString(),
+      rawPayload: { promo: "first_case_free", appliedAt: new Date().toISOString(), clinicId }
+    };
+    await upsertPaymentRecord(freePayment);
+    return { applied: true, payment: freePayment, reason: "applied" };
+  }
+
+  const { data: firstClinicCase, error: firstCaseError } = await supabase
+    .from("cases")
+    .select("id")
+    .eq("clinic_id", clinicId)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (firstCaseError) return { applied: false, reason: "first_case_lookup_failed" };
+  if (!firstClinicCase?.id || firstClinicCase.id !== caseId) {
+    return { applied: false, reason: "not_first_case" };
+  }
+
+  const { data: clinicCases, error: clinicCasesError } = await supabase
+    .from("cases")
+    .select("id")
+    .eq("clinic_id", clinicId);
+  if (clinicCasesError || !Array.isArray(clinicCases)) {
+    return { applied: false, reason: "clinic_cases_lookup_failed" };
+  }
+  const caseIds = clinicCases.map((row) => row.id).filter(Boolean);
+  if (!caseIds.length) return { applied: false, reason: "no_clinic_cases" };
+
+  const { data: txRows, error: txError } = await supabase
+    .from("payment_transactions")
+    .select("case_id, status, method")
+    .in("case_id", caseIds);
+  if (txError) return { applied: false, reason: "payments_lookup_failed" };
+
+  const consumed = (txRows || []).some(
+    (row) => row?.method === FIRST_FREE_METHOD && isPaymentPaid(row)
+  );
+  if (consumed) return { applied: false, reason: "already_consumed" };
+
+  const anyPaid = (txRows || []).some((row) => isPaymentPaid(row));
+  if (anyPaid) return { applied: false, reason: "already_paid_case_exists" };
+
+  const freePayment = {
+    paymentId: `free_${caseId}`,
+    method: FIRST_FREE_METHOD,
+    provider: FIRST_FREE_PROVIDER,
+    status: "paid",
+    amount: 0,
+    currency: "USD",
+    caseId,
+    rawPayload: { promo: "first_case_free", appliedAt: new Date().toISOString(), clinicId }
+  };
+  await upsertPaymentRecord(freePayment);
+  return { applied: true, payment: freePayment, reason: "applied" };
 }
 
 export async function listPaidCaseIds() {

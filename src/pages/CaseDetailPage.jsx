@@ -9,6 +9,7 @@ import {
   listClinicCases
 } from "../api/platformApi";
 import {
+  claimFirstFreeCase,
   getPaymentForCase,
   isP2pEnabled,
   isPaymentPaid,
@@ -57,10 +58,25 @@ function CaseDetailPage() {
         }
       }
 
+      let resolvedPayment = payment;
+      const canAttemptFree =
+        resolvedCase
+        && profile?.role === "clinic"
+        && resolvedCase.status === "Report Ready"
+        && !isPaymentPaid(payment);
+      if (canAttemptFree) {
+        try {
+          await claimFirstFreeCase({ caseId: resolvedCase.id, clinicId: resolvedCase.clinicId });
+          resolvedPayment = await getPaymentForCase(caseId).catch(() => payment);
+        } catch (_promoError) {
+          // Promo claim failure should never block case detail rendering.
+        }
+      }
+
       if (cancelled) return;
       setItem(resolvedCase);
       setFiles(caseFiles || []);
-      setPaid(isPaymentPaid(payment));
+      setPaid(isPaymentPaid(resolvedPayment));
       setLoading(false);
 
       const reviewerId = resolvedCase?.reviewerId;
