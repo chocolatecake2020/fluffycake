@@ -7,6 +7,7 @@ function CaseTable({ items, paidCaseIds }) {
   const p2pOnly = isP2pEnabled() && !isPlatformCheckoutEnabled();
 
   return (
+    <div className="table-wrap">
     <table>
       <thead>
         <tr>
@@ -51,6 +52,7 @@ function CaseTable({ items, paidCaseIds }) {
         })}
       </tbody>
     </table>
+    </div>
   );
 }
 

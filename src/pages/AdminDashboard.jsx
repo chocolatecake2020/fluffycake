@@ -83,6 +83,7 @@ function AdminDashboard() {
       {showPayouts && <PayoutsQueueTable items={payouts} onRefresh={refreshPayouts} />}
       <section className="card">
         <h3>Recent Submitted Reports</h3>
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -101,9 +102,11 @@ function AdminDashboard() {
             ))}
           </tbody>
         </table>
+        </div>
       </section>
       <section className="card">
         <h3>Audit Log</h3>
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -124,6 +127,7 @@ function AdminDashboard() {
             ))}
           </tbody>
         </table>
+        </div>
       </section>
     </main>
   );

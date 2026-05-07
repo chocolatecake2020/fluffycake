@@ -47,6 +47,7 @@ function PayoutsQueueTable({ items = [], onRefresh }) {
   return (
     <section className="card">
       <h3>Payouts Queue</h3>
+      <div className="table-wrap">
       <table>
         <thead>
           <tr>
@@ -88,6 +89,7 @@ function PayoutsQueueTable({ items = [], onRefresh }) {
           ))}
         </tbody>
       </table>
+      </div>
     </section>
   );
 }

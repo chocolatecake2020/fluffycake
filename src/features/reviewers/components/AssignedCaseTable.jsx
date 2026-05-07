@@ -27,6 +27,7 @@ function ActionCell({ item, currentUserId }) {
 
 function AssignedCaseTable({ items, currentUserId }) {
   return (
+    <div className="table-wrap">
     <table>
       <thead>
         <tr>
@@ -51,6 +52,7 @@ function AssignedCaseTable({ items, currentUserId }) {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 

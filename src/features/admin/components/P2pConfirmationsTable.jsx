@@ -55,6 +55,7 @@ function P2pConfirmationsTable({ items = [], onRefresh, currentAdminEmail }) {
         Clinic-submitted payments are auto-marked as paid for the pilot. Use Dispute to roll back
         a payment if the proof turns out to be invalid; the report will be re-locked.
       </p>
+      <div className="table-wrap">
       <table>
         <thead>
           <tr>
@@ -130,6 +131,7 @@ function P2pConfirmationsTable({ items = [], onRefresh, currentAdminEmail }) {
           ))}
         </tbody>
       </table>
+      </div>
     </section>
   );
 }

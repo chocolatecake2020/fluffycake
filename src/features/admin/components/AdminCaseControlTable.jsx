@@ -4,6 +4,7 @@ function AdminCaseControlTable({ items }) {
   return (
     <section className="card">
       <h3>Case Control</h3>
+      <div className="table-wrap">
       <table>
         <thead>
           <tr>
@@ -18,6 +19,7 @@ function AdminCaseControlTable({ items }) {
           ))}
         </tbody>
       </table>
+      </div>
     </section>
   );
 }
