@@ -1,26 +1,6 @@
 import Stripe from "stripe";
 import { asNumber, getBaseUrl, json, methodNotAllowed } from "./_utils.js";
-
-async function createPayPalAccessToken() {
-  const clientId = process.env.PAYPAL_CLIENT_ID;
-  const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
-  const apiBase = process.env.PAYPAL_API_BASE || "https://api-m.sandbox.paypal.com";
-  if (!clientId || !clientSecret) {
-    throw new Error("Missing PayPal credentials.");
-  }
-
-  const response = await fetch(`${apiBase}/v1/oauth2/token`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: "grant_type=client_credentials"
-  });
-  if (!response.ok) throw new Error("Failed to get PayPal access token.");
-  const data = await response.json();
-  return { accessToken: data.access_token, apiBase };
-}
+import { createPayPalAccessToken } from "./_paypal.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return methodNotAllowed(res, ["POST"]);
@@ -39,8 +19,16 @@ export default async function handler(req, res) {
     if (method === "paypal") {
       const { accessToken, apiBase } = await createPayPalAccessToken();
       const baseUrl = getBaseUrl(req);
-      const returnUrl = process.env.PAYPAL_RETURN_URL || `${baseUrl}/payments`;
-      const cancelUrl = process.env.PAYPAL_CANCEL_URL || `${baseUrl}/payments`;
+      const returnPath =
+        caseId != null && String(caseId).length
+          ? `/payments?caseId=${encodeURIComponent(String(caseId))}&paypal_return=1`
+          : "/payments?paypal_return=1";
+      const returnUrl = process.env.PAYPAL_RETURN_URL || `${baseUrl}${returnPath}`;
+      const cancelUrl =
+        process.env.PAYPAL_CANCEL_URL ||
+        (caseId != null && String(caseId).length
+          ? `${baseUrl}/cases/${encodeURIComponent(String(caseId))}#payment`
+          : `${baseUrl}/payments`);
 
       const response = await fetch(`${apiBase}/v2/checkout/orders`, {
         method: "POST",
@@ -54,11 +42,15 @@ export default async function handler(req, res) {
           purchase_units: [
             {
               reference_id: caseId || `case-${Date.now()}`,
+              description: caseId
+                ? `VetBridge case review (case ${caseId})`
+                : "VetBridge case review",
               amount: { currency_code: currency, value: amount.toFixed(2) }
             }
           ],
           application_context: {
             brand_name: "VetBridge",
+            landing_page: "NO_PREFERENCE",
             user_action: "PAY_NOW",
             return_url: returnUrl,
             cancel_url: cancelUrl

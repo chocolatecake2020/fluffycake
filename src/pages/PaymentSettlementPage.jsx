@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
+  captureAndSavePayPalCheckout,
   createCheckoutSession,
   createUsdtCharge,
   getPaymentStatus,
@@ -18,6 +19,7 @@ const PAYPAL_RATE = { percent: 0.039, fixed: 0.49 };
 
 function PaymentSettlementPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { profile } = useAuth();
   const [methods, setMethods] = useState([]);
   const [result, setResult] = useState(null);
@@ -65,6 +67,41 @@ function PaymentSettlementPage() {
     if (!caseId) return;
     setForm((prev) => ({ ...prev, caseId }));
   }, [location.search]);
+
+  useEffect(() => {
+    const query = new URLSearchParams(location.search);
+    const token = query.get("token");
+    const caseId = query.get("caseId");
+    if (!token || !caseId || query.get("paypal_return") !== "1") return;
+
+    const guardKey = `vetbridge_pp_capture_${token}`;
+    if (sessionStorage.getItem(guardKey)) {
+      window.history.replaceState({}, "", `/payments?caseId=${encodeURIComponent(caseId)}`);
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      setLoading(true);
+      setErrorMessage("");
+      try {
+        await captureAndSavePayPalCheckout({ orderId: token, caseId });
+        sessionStorage.setItem(guardKey, "1");
+        window.history.replaceState({}, "", `/payments?caseId=${encodeURIComponent(caseId)}`);
+        navigate(`/cases/${encodeURIComponent(caseId)}#report`, { replace: true });
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(error?.message || "Could not confirm PayPal payment.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.search, navigate]);
 
   useEffect(() => {
     const lastPaymentId = window.localStorage.getItem("vetbridge_last_payment_id");
@@ -140,9 +177,8 @@ function PaymentSettlementPage() {
         <p>Pilot payment orchestration skeleton (mock provider APIs, ready for Stripe / PayPal / USDT gateway swap).</p>
         {p2pEnabled && (
           <div className="warning-box">
-            <strong>Pilot mode:</strong> Direct PayPal settlement is enabled. For each case, the
-            clinic pays the reviewer directly via PayPal and submits the proof on the case detail
-            page. The admin then verifies and unlocks the report.
+            <strong>Pilot mode:</strong> Case payments use PayPal Checkout on the case page. After
+            PayPal approves the payment, the report unlocks automatically (no manual receipt upload).
           </div>
         )}
         {!platformEnabled && (

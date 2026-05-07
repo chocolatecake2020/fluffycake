@@ -320,7 +320,7 @@ function CaseDetailPage() {
               <div className="row between">
                 <p>
                   {showP2pCta && !showPlatformCta
-                    ? "Review report is locked. Complete the direct PayPal settlement above and wait for admin verification to unlock the report."
+                    ? "Review report is locked. Complete PayPal checkout in the payment section above—the report unlocks automatically after payment."
                     : "Review report is locked. Complete payment to unlock the full report."}
                 </p>
                 {showP2pCta && !showPlatformCta ? (

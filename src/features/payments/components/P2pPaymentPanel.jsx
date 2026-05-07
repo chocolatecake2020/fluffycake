@@ -4,59 +4,45 @@ import {
   FIRST_FREE_METHOD,
   P2P_METHOD,
   P2P_STATUSES,
-  PAYPAL_SEND_MONEY_URL,
+  PAYPAL_CHECKOUT_METHOD,
+  createCheckoutSession,
   getDefaultCasePriceUsd,
   getPaymentForCase,
+  hasPaymentsGateway,
   isP2pEnabled,
-  isPaymentPaid,
-  isValidPaypalTransactionId,
-  submitP2pPayment
+  isPaymentPaid
 } from "../../../api/paymentsApi";
 
-function StatusLine({ status, rejectionReason }) {
-  if (!status) return <span className="status-pill status-pending">No payment yet</span>;
-  const map = {
-    [P2P_STATUSES.AWAITING_CLINIC_PAYMENT]: ["status-pending", "Awaiting clinic payment"],
-    [P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION]: ["status-processing", "Submitted"],
-    [P2P_STATUSES.PAID]: ["status-paid", "Paid"],
-    [P2P_STATUSES.REJECTED]: ["status-failed", "Rejected"]
-  };
-  const [cls, label] = map[status] || ["status-pending", status];
-  return (
-    <span className={`status-pill ${cls}`}>
-      {label}
-      {status === P2P_STATUSES.REJECTED && rejectionReason ? ` - ${rejectionReason}` : ""}
-    </span>
-  );
-}
-
-function CopyButton({ value, label = "Copy" }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = async () => {
-    if (!value) return;
-    try {
-      await navigator.clipboard.writeText(String(value));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    } catch (_error) {
-      const textarea = document.createElement("textarea");
-      textarea.value = String(value);
-      document.body.appendChild(textarea);
-      textarea.select();
-      try {
-        document.execCommand("copy");
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1400);
-      } finally {
-        document.body.removeChild(textarea);
-      }
-    }
-  };
-  return (
-    <button className="btn small" type="button" onClick={handleCopy} disabled={!value}>
-      {copied ? "Copied" : label}
-    </button>
-  );
+function PaymentStatusPill({ payment, paid, firstCaseFree }) {
+  if (firstCaseFree) {
+    return <span className="status-pill status-paid">First case free</span>;
+  }
+  if (paid) {
+    return <span className="status-pill status-paid">Paid</span>;
+  }
+  const method = payment?.method;
+  const status = payment?.status;
+  if (method === PAYPAL_CHECKOUT_METHOD && String(status).toLowerCase() === "redirect_required") {
+    return <span className="status-pill status-processing">PayPal checkout in progress</span>;
+  }
+  if (method === P2P_METHOD) {
+    const map = {
+      [P2P_STATUSES.AWAITING_CLINIC_PAYMENT]: ["status-pending", "Awaiting clinic payment"],
+      [P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION]: ["status-processing", "Submitted"],
+      [P2P_STATUSES.PAID]: ["status-paid", "Paid"],
+      [P2P_STATUSES.REJECTED]: ["status-failed", "Rejected"]
+    };
+    const [cls, label] = map[status] || ["status-pending", status || "—"];
+    return (
+      <span className={`status-pill ${cls}`}>
+        {label}
+        {status === P2P_STATUSES.REJECTED && payment?.rejectionReason
+          ? ` - ${payment.rejectionReason}`
+          : ""}
+      </span>
+    );
+  }
+  return <span className="status-pill status-pending">No payment yet</span>;
 }
 
 function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
@@ -65,15 +51,12 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [transactionRef, setTransactionRef] = useState("");
-  const [proofFile, setProofFile] = useState(null);
 
   const reviewerId = caseItem?.reviewerId || null;
   const caseId = caseItem?.id;
   const amountUsd = useMemo(() => getDefaultCasePriceUsd(), []);
-  // Treat anyone who is not explicitly a reviewer/admin as a clinic actor.
-  // This keeps the payment flow visible even when a profile.role value has
-  // not been persisted yet (e.g. legacy account or skipped role selection).
+  const gatewayOk = hasPaymentsGateway();
+
   const isClinic = role !== "reviewer" && role !== "admin";
 
   useEffect(() => {
@@ -83,7 +66,7 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
       try {
         const [profile, latestPayment] = await Promise.all([
           reviewerId ? getUserProfileById(reviewerId) : Promise.resolve(null),
-          caseId ? getPaymentForCase(caseId) : Promise.resolve(null)
+          caseId ? getPaymentForCase(caseId).catch(() => null) : Promise.resolve(null)
         ]);
         if (cancelled) return;
         setReviewerProfile(profile);
@@ -98,43 +81,27 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
     };
   }, [reviewerId, caseId]);
 
-  const refreshPayment = async () => {
-    const latestPayment = await getPaymentForCase(caseId);
-    setPayment(latestPayment);
-    if (typeof onPaymentChanged === "function") onPaymentChanged(latestPayment);
-  };
-
-  const handleSubmit = async () => {
-    const trimmedTx = transactionRef.trim().toUpperCase();
-    if (!isValidPaypalTransactionId(trimmedTx)) {
-      setMessage("PayPal Transaction ID must be exactly 17 characters (A-Z, 0-9).");
-      return;
-    }
-    if (!proofFile) {
-      setMessage("Please attach a screenshot of the PayPal receipt.");
-      return;
-    }
-    if (!reviewerProfile?.paypal_email && !payment?.paypalRecipientEmail) {
-      setMessage("Reviewer's PayPal email is missing. Please contact the admin.");
+  const handlePayPalCheckout = async () => {
+    if (!caseId) return;
+    if (!gatewayOk) {
+      setMessage("Payments API URL is not configured. Set VITE_PAYMENTS_API_BASE_URL on the frontend.");
       return;
     }
     setBusy(true);
     setMessage("");
     try {
-      await submitP2pPayment({
-        caseId,
-        paypalRecipientEmail: reviewerProfile?.paypal_email || payment?.paypalRecipientEmail,
+      const session = await createCheckoutSession({
+        method: "paypal",
         amount: amountUsd,
-        transactionReference: trimmedTx,
-        proofFile
+        currency: "USD",
+        caseId
       });
-      setTransactionRef("");
-      setProofFile(null);
-      await refreshPayment();
-      setMessage("Payment recorded. The report has been unlocked.");
+      if (!session?.redirectUrl) {
+        throw new Error("PayPal did not return a checkout link. Check server PayPal credentials.");
+      }
+      window.location.assign(session.redirectUrl);
     } catch (error) {
-      setMessage(error?.message || "Failed to submit confirmation.");
-    } finally {
+      setMessage(error?.message || "Could not start PayPal checkout.");
       setBusy(false);
     }
   };
@@ -144,46 +111,41 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
   if (loading) {
     return (
       <section className="card" id="payment">
-        <h3>Direct PayPal Settlement</h3>
+        <h3>PayPal Checkout</h3>
         <p className="auth-meta">Loading payment status...</p>
       </section>
     );
   }
 
-  const status = payment?.method === P2P_METHOD ? payment?.status : null;
   const paid = isPaymentPaid(payment);
   const firstCaseFreeApplied = payment?.method === FIRST_FREE_METHOD && paid;
-  const reviewerEmail = reviewerProfile?.paypal_email || payment?.paypalRecipientEmail;
+  const checkoutStarted =
+    payment?.method === PAYPAL_CHECKOUT_METHOD && String(payment?.status).toLowerCase() === "redirect_required";
+
   const reviewerLoginEmail = reviewerProfile?.email || null;
   const reviewerName = reviewerProfile?.full_name || null;
   const reviewerFallbackId =
     !reviewerName && !reviewerLoginEmail ? reviewerId : null;
-  const paypalDiffersFromLogin =
-    reviewerEmail && reviewerLoginEmail && reviewerEmail !== reviewerLoginEmail;
   const noReviewer = !reviewerId;
-  const noReviewerPaypal = reviewerId && !reviewerEmail;
 
-  const trimmedTx = transactionRef.trim().toUpperCase();
-  const txValid = isValidPaypalTransactionId(trimmedTx);
-  const canSubmit = isClinic && reviewerEmail && txValid && proofFile && !busy;
-
-  // Hide form for already-confirmed states
-  const alreadySubmitted =
-    status === P2P_STATUSES.AWAITING_ADMIN_CONFIRMATION || status === P2P_STATUSES.PAID;
+  const needsPayment = isClinic && !paid && !firstCaseFreeApplied;
+  const canPay = needsPayment && gatewayOk && caseItem?.status === "Report Ready";
 
   return (
     <section className="card" id="payment">
-      <h3>Direct PayPal Settlement (Pilot)</h3>
+      <h3>PayPal Checkout</h3>
       {firstCaseFreeApplied && (
         <div className="warning-box" style={{ marginBottom: 12 }}>
           First case free credit applied for this clinic. No payment is required for this case.
         </div>
       )}
       <p>
-        For pilot cases, the clinic pays the reviewer directly via PayPal. Send the funds to the
-        reviewer's PayPal address, attach the PayPal transaction ID and a receipt screenshot, and
-        the report will be unlocked immediately. (The admin retains the right to flag a payment
-        as disputed if the proof is later found invalid.)
+        Pay securely with PayPal. After payment completes, your case report unlocks automatically—no transaction ID or
+        receipt upload is required.
+      </p>
+      <p className="auth-meta">
+        Settlement is processed to the VetBridge business account (vetbridgesupport@gmail.com). Reviewer payouts are
+        handled separately per pilot terms (approx. fee split is configured for settlement math).
       </p>
 
       <div className="grid two">
@@ -199,138 +161,65 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
                 <span className="auth-meta">Login: {reviewerLoginEmail}</span>
               )}
               {reviewerFallbackId && <span className="auth-meta">{reviewerFallbackId}</span>}
-              {reviewerEmail && (
-                <>
-                  <br />
-                  <span className="auth-meta">
-                    PayPal: <code>{reviewerEmail}</code>
-                    {paypalDiffersFromLogin ? " (differs from login)" : ""}
-                  </span>
-                </>
-              )}
             </p>
           )}
         </div>
         <div>
           <small>Status</small>
           <p>
-            <StatusLine status={status} rejectionReason={payment?.rejectionReason} />
+            <PaymentStatusPill payment={payment} paid={paid} firstCaseFree={firstCaseFreeApplied} />
           </p>
         </div>
       </div>
 
-      {isClinic && noReviewer && (
+      {isClinic && caseItem?.status !== "Report Ready" && !firstCaseFreeApplied && (
         <div className="warning-box">
-          A reviewer has not been assigned to this case yet. Please wait for the admin to assign
-          one before initiating payment.
+          Payment opens when the report is ready (&quot;Report Ready&quot;).
         </div>
       )}
 
-      {isClinic && !noReviewer && noReviewerPaypal && (
+      {isClinic && !gatewayOk && needsPayment && (
         <div className="warning-box">
-          The assigned reviewer has not registered a PayPal email yet. Please contact the admin.
+          <strong>Configuration needed:</strong> set <code>VITE_PAYMENTS_API_BASE_URL</code> (e.g.{" "}
+          <code>/api/payments</code> on Vercel) and server env <code>PAYPAL_CLIENT_ID</code> /{" "}
+          <code>PAYPAL_CLIENT_SECRET</code> (vetbridgesupport business account).
         </div>
       )}
 
-      {isClinic && reviewerEmail && !alreadySubmitted && !firstCaseFreeApplied && (
-        <>
-          <div className="card" style={{ marginTop: 12 }}>
-            <strong>Step 1. Send the payment via PayPal</strong>
-            <div className="form-grid auth-grid">
-              <div className="full">
-                <small>Reviewer's PayPal email</small>
-                <div className="row">
-                  <input type="text" value={reviewerEmail} readOnly />
-                  <CopyButton value={reviewerEmail} label="Copy email" />
-                </div>
-              </div>
-              <div className="full">
-                <small>Amount (USD)</small>
-                <div className="row">
-                  <input type="text" value={amountUsd.toFixed(2)} readOnly />
-                  <CopyButton value={amountUsd.toFixed(2)} label="Copy amount" />
-                </div>
-              </div>
-              <div className="row full">
-                <a
-                  className="btn primary"
-                  href={PAYPAL_SEND_MONEY_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open PayPal Send Money
-                </a>
-              </div>
-            </div>
-          </div>
-
-          <div className="card" style={{ marginTop: 12 }}>
-            <strong>Step 2. Submit proof</strong>
-            <div className="form-grid auth-grid">
-              <div className="full">
-                <label>PayPal Transaction ID (17 characters, A-Z and 0-9)</label>
-                <input
-                  type="text"
-                  value={transactionRef}
-                  onChange={(event) => setTransactionRef(event.target.value)}
-                  placeholder="e.g. 8AB12345CD6789012"
-                  maxLength={17}
-                  spellCheck={false}
-                  style={{ textTransform: "uppercase", fontFamily: "monospace" }}
-                />
-                {transactionRef.length > 0 && !txValid && (
-                  <small style={{ color: "#8b1f15" }}>
-                    Must be exactly 17 characters (A-Z, 0-9). Currently {trimmedTx.length}/17.
-                  </small>
-                )}
-              </div>
-              <div className="full">
-                <label>Receipt screenshot (image or PDF)</label>
-                <input
-                  type="file"
-                  accept="image/*,application/pdf"
-                  onChange={(event) => setProofFile(event.target.files?.[0] || null)}
-                />
-                {proofFile && <small>{proofFile.name}</small>}
-              </div>
-              <div className="row full">
-                <button
-                  className="btn primary"
-                  type="button"
-                  onClick={handleSubmit}
-                  disabled={!canSubmit}
-                >
-                  {busy ? "Submitting..." : "Submit Confirmation"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {(alreadySubmitted || firstCaseFreeApplied) && (
+      {canPay && (
         <div className="card" style={{ marginTop: 12 }}>
-          {payment?.transactionReference && (
-            <p className="auth-meta">PayPal Tx ID: <code>{payment.transactionReference}</code></p>
-          )}
-          {payment?.proofUrl && (
+          <strong>Amount: ${amountUsd.toFixed(2)} USD</strong>
+          <p className="auth-meta" style={{ marginTop: 8 }}>
+            You will be redirected to PayPal to complete payment. Return to this site afterward—the report unlocks
+            automatically.
+          </p>
+          <div className="row full" style={{ marginTop: 12 }}>
+            <button className="btn primary" type="button" onClick={handlePayPalCheckout} disabled={busy}>
+              {busy ? "Starting checkout..." : "Pay with PayPal"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(paid || firstCaseFreeApplied) && (
+        <div className="card" style={{ marginTop: 12 }}>
+          {payment?.reference && payment?.method === PAYPAL_CHECKOUT_METHOD && (
             <p className="auth-meta">
-              Proof: <a href={payment.proofUrl} target="_blank" rel="noreferrer">view screenshot</a>
+              PayPal capture: <code>{payment.reference}</code>
             </p>
           )}
           {firstCaseFreeApplied ? (
             <p>First case free credit is applied. The report is unlocked without payment.</p>
-          ) : paid ? (
-            <p>Payment recorded. The report is now unlocked.</p>
-          ) : status === P2P_STATUSES.REJECTED ? (
-            <p>
-              This payment was flagged as disputed by the admin
-              {payment?.rejectionReason ? `: ${payment.rejectionReason}` : ""}. Please contact
-              the admin or resubmit a corrected proof.
-            </p>
           ) : (
-            <p>Confirmation received. Awaiting verification.</p>
+            <p>Payment recorded. The report is now unlocked.</p>
           )}
+        </div>
+      )}
+
+      {checkoutStarted && !paid && (
+        <div className="warning-box" style={{ marginTop: 12 }}>
+          PayPal checkout was started. If you already paid, open the case again or use the link PayPal showed after
+          payment. If the report is still locked, click <strong>Pay with PayPal</strong> again to resume.
         </div>
       )}
 

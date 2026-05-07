@@ -44,8 +44,14 @@ export const P2P_STATUSES = Object.freeze({
 
 export const P2P_PROVIDER = "PayPal (Direct P2P)";
 export const P2P_METHOD = "p2p_paypal";
+export const PAYPAL_CHECKOUT_METHOD = "paypal_checkout";
+export const PAYPAL_CHECKOUT_PROVIDER = "PayPal Checkout";
 export const FIRST_FREE_METHOD = "first_case_free";
 export const FIRST_FREE_PROVIDER = "VetBridge First Case Promo";
+
+export function hasPaymentsGateway() {
+  return Boolean(paymentsApiBaseUrl);
+}
 
 const methodCatalog = [
   {
@@ -425,6 +431,56 @@ export async function createCheckoutSession(payload) {
     redirectUrl: configuredRedirect || null
   };
   return upsertPaymentRecord(payment);
+}
+
+export async function capturePayPalOrder(orderId) {
+  if (!orderId) throw new Error("PayPal order id is required.");
+  if (!paymentsApiBaseUrl) throw new Error("Payment API is not configured (VITE_PAYMENTS_API_BASE_URL).");
+  return requestGateway("/paypal-capture", { method: "POST", body: { orderId } });
+}
+
+export async function savePayPalCheckoutPaid({ caseId, orderId, captureId, amount, currency }) {
+  const paymentId = `paypal_${orderId}`;
+  const payment = {
+    paymentId,
+    method: PAYPAL_CHECKOUT_METHOD,
+    provider: PAYPAL_CHECKOUT_PROVIDER,
+    status: "paid",
+    amount: Number(amount || 0),
+    currency: currency || "USD",
+    caseId,
+    reference: captureId || null,
+    rawPayload: {
+      mode: PAYPAL_CHECKOUT_METHOD,
+      orderId,
+      captureId,
+      capturedAt: new Date().toISOString()
+    }
+  };
+  const saved = await upsertPaymentRecord(payment);
+  if (caseId) {
+    try {
+      await recheckPayout(caseId);
+    } catch (_e) {
+      // Non-blocking
+    }
+  }
+  return saved;
+}
+
+export async function captureAndSavePayPalCheckout({ orderId, caseId }) {
+  const result = await capturePayPalOrder(orderId);
+  if (!result?.ok) {
+    throw new Error(result?.message || "PayPal capture did not complete.");
+  }
+  await savePayPalCheckoutPaid({
+    caseId,
+    orderId: result.orderId || orderId,
+    captureId: result.captureId,
+    amount: result.amount,
+    currency: result.currency
+  });
+  return result;
 }
 
 export async function createUsdtCharge(payload) {
