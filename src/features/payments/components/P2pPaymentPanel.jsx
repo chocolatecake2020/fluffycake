@@ -45,7 +45,7 @@ function PaymentStatusPill({ payment, paid, firstCaseFree }) {
   return <span className="status-pill status-pending">No payment yet</span>;
 }
 
-function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
+function P2pPaymentPanel({ caseItem, role, onPaymentChanged, refreshKey = 0 }) {
   const [reviewerProfile, setReviewerProfile] = useState(null);
   const [payment, setPayment] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -79,7 +79,10 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged }) {
     return () => {
       cancelled = true;
     };
-  }, [reviewerId, caseId]);
+    // refreshKey is bumped by the parent (e.g., after claiming the first
+    // case free promo) so we re-read payment_transactions and avoid showing
+    // a stale "Pay" CTA after the credit has been applied.
+  }, [reviewerId, caseId, refreshKey]);
 
   const handlePayPalCheckout = async () => {
     if (!caseId) return;

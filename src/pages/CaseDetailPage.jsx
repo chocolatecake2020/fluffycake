@@ -38,6 +38,9 @@ function CaseDetailPage() {
   const [deleteError, setDeleteError] = useState("");
   const [deletingReport, setDeletingReport] = useState(false);
   const [reportError, setReportError] = useState("");
+  // Bumped after a background "first case free" claim succeeds so child
+  // payment panels can re-fetch and avoid showing a stale "Pay" button.
+  const [paymentRefreshKey, setPaymentRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,10 +92,11 @@ function CaseDetailPage() {
 
       // First-case-free promo runs in the background so it never blocks the
       // main case detail render. The payment pill updates once it settles.
+      // We attempt the claim regardless of case status so a clinic never
+      // briefly sees a Pay button while the report is being prepared.
       const canAttemptFree =
         resolvedCase
         && profile?.role === "clinic"
-        && resolvedCase.status === "Report Ready"
         && !isPaymentPaid(payment);
       if (canAttemptFree) {
         (async () => {
@@ -106,7 +110,13 @@ function CaseDetailPage() {
               LOAD_TIMEOUT_MS,
               payment
             );
-            if (!cancelled) setPaid(isPaymentPaid(refreshed));
+            if (!cancelled) {
+              setPaid(isPaymentPaid(refreshed));
+              // Force the payment panel to re-read the latest payment row
+              // (which may have flipped to first_case_free / paid) so any
+              // transient "Pay" CTA is replaced immediately.
+              setPaymentRefreshKey((value) => value + 1);
+            }
           } catch (_promoError) {
             // Promo claim failure should never affect the rendered case.
           }
@@ -325,7 +335,12 @@ function CaseDetailPage() {
           <li>Report pending</li>
         </ul>
       </section>
-      <P2pPaymentPanel caseItem={item} role={profile?.role} onPaymentChanged={handlePaymentChanged} />
+      <P2pPaymentPanel
+        caseItem={item}
+        role={profile?.role}
+        onPaymentChanged={handlePaymentChanged}
+        refreshKey={paymentRefreshKey}
+      />
       <section className="card" id="report">
         <div className="row between">
           <h3 style={{ margin: 0 }}>Report</h3>

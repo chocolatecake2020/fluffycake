@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { createCase, getCase, updateCase, uploadCaseFiles } from "../api/platformApi";
+import { claimFirstFreeCase } from "../api/paymentsApi";
 import DashboardHeader from "../components/common/DashboardHeader";
 import Field from "../components/common/Field";
 import { clinicMenu } from "../constants/menus";
@@ -230,6 +231,12 @@ function NewCasePage() {
           "Case creation timed out. Please retry in a few seconds."
         );
         resolvedCaseId = created.id;
+        // Apply the "first case free" promo immediately after the case is
+        // created so the clinic never sees a Pay button on their first case.
+        // Fire-and-forget: claim failure must never block the submission flow,
+        // and the case detail page also retries this on first load as a
+        // safety net for legacy accounts.
+        claimFirstFreeCase({ caseId: resolvedCaseId, clinicId }).catch(() => {});
       }
       if (files.length) {
         await withTimeout(
