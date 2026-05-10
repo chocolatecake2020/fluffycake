@@ -24,15 +24,7 @@ function RoleSelectionPage() {
 
   const onChange = (e) => {
     const { name, value } = e.target;
-    setForm((prev) => {
-      const next = { ...prev, [name]: value };
-      // Convenience: auto-mirror account email into PayPal email while it has not
-      // been edited explicitly. Users can still override the PayPal email after.
-      if (name === "email" && !prev.paypalEmail) {
-        next.paypalEmail = value;
-      }
-      return next;
-    });
+    setForm((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSignIn = async () => {
@@ -150,7 +142,7 @@ function RoleSelectionPage() {
             </div>
             <div>
               <label>Phone (for signup only)</label>
-              <input name="phone" type="tel" value={form.phone} onChange={onChange} placeholder="+82 10..." />
+              <input name="phone" type="tel" value={form.phone} onChange={onChange} />
             </div>
             <div>
               <label>Name (for signup only)</label>

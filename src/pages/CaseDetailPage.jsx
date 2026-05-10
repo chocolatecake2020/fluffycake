@@ -40,43 +40,39 @@ function CaseDetailPage() {
 
   useEffect(() => {
     let cancelled = false;
+    // Safety net: if any underlying call (Supabase auth/session edge cases)
+    // never settles, we still resolve the loading state with a fallback so
+    // the page does not hang on "Loading case...".
+    const withTimeout = (promise, ms, fallback) =>
+      Promise.race([
+        Promise.resolve(promise).catch(() => fallback),
+        new Promise((resolve) => setTimeout(() => resolve(fallback), ms))
+      ]);
+
+    const LOAD_TIMEOUT_MS = 8000;
+
     const load = async () => {
       setLoading(true);
       const [caseData, caseFiles, payment] = await Promise.all([
-        getCase(caseId).catch(() => null),
-        listCaseFiles(caseId).catch(() => []),
-        getPaymentForCase(caseId).catch(() => null)
+        withTimeout(getCase(caseId), LOAD_TIMEOUT_MS, null),
+        withTimeout(listCaseFiles(caseId), LOAD_TIMEOUT_MS, []),
+        withTimeout(getPaymentForCase(caseId), LOAD_TIMEOUT_MS, null)
       ]);
 
       let resolvedCase = caseData;
       if (!resolvedCase && profile?.role === "clinic") {
         try {
-          const clinicCases = await listClinicCases();
-          resolvedCase = clinicCases.find((c) => c.id === caseId) || null;
+          const clinicCases = await withTimeout(listClinicCases(), LOAD_TIMEOUT_MS, []);
+          resolvedCase = (clinicCases || []).find((c) => c.id === caseId) || null;
         } catch (_error) {
           // ignore
-        }
-      }
-
-      let resolvedPayment = payment;
-      const canAttemptFree =
-        resolvedCase
-        && profile?.role === "clinic"
-        && resolvedCase.status === "Report Ready"
-        && !isPaymentPaid(payment);
-      if (canAttemptFree) {
-        try {
-          await claimFirstFreeCase({ caseId: resolvedCase.id, clinicId: resolvedCase.clinicId });
-          resolvedPayment = await getPaymentForCase(caseId).catch(() => payment);
-        } catch (_promoError) {
-          // Promo claim failure should never block case detail rendering.
         }
       }
 
       if (cancelled) return;
       setItem(resolvedCase);
       setFiles(caseFiles || []);
-      setPaid(isPaymentPaid(resolvedPayment));
+      setPaid(isPaymentPaid(payment));
       setLoading(false);
 
       const reviewerId = resolvedCase?.reviewerId;
@@ -88,6 +84,32 @@ function CaseDetailPage() {
           .catch(() => null);
       } else {
         setReviewerProfile(null);
+      }
+
+      // First-case-free promo runs in the background so it never blocks the
+      // main case detail render. The payment pill updates once it settles.
+      const canAttemptFree =
+        resolvedCase
+        && profile?.role === "clinic"
+        && resolvedCase.status === "Report Ready"
+        && !isPaymentPaid(payment);
+      if (canAttemptFree) {
+        (async () => {
+          try {
+            await claimFirstFreeCase({
+              caseId: resolvedCase.id,
+              clinicId: resolvedCase.clinicId
+            });
+            const refreshed = await withTimeout(
+              getPaymentForCase(caseId),
+              LOAD_TIMEOUT_MS,
+              payment
+            );
+            if (!cancelled) setPaid(isPaymentPaid(refreshed));
+          } catch (_promoError) {
+            // Promo claim failure should never affect the rendered case.
+          }
+        })();
       }
     };
     load();
