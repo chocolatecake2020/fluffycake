@@ -40,8 +40,12 @@ function AssignedCaseTable({ items, currentUserId }) {
       <tbody>
         {items.map((item) => (
           <tr key={item.id}>
-            <td>{item.id}</td>
-            <td>{item.title}</td>
+            <td>
+              <Link to={`/cases/${item.id}`}>{item.id}</Link>
+            </td>
+            <td>
+              <Link to={`/cases/${item.id}`}>{item.title}</Link>
+            </td>
             <td>
               <StatusBadge status={item.status} />
             </td>
