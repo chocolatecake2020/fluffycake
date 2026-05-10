@@ -2,8 +2,9 @@ import { Link } from "react-router-dom";
 import { isP2pEnabled, isPlatformCheckoutEnabled } from "../../../api/paymentsApi";
 import StatusBadge from "../../../components/common/StatusBadge";
 
-function CaseTable({ items, paidCaseIds }) {
+function CaseTable({ items, paidCaseIds, freeCaseIds }) {
   const paidSet = paidCaseIds instanceof Set ? paidCaseIds : new Set(paidCaseIds || []);
+  const freeSet = freeCaseIds instanceof Set ? freeCaseIds : new Set(freeCaseIds || []);
   const p2pOnly = isP2pEnabled() && !isPlatformCheckoutEnabled();
 
   return (
@@ -21,10 +22,31 @@ function CaseTable({ items, paidCaseIds }) {
       </thead>
       <tbody>
         {items.map((item) => {
-          const isPaid = paidSet.has(item.id);
+          const isFree = freeSet.has(item.id);
+          const isPaid = !isFree && paidSet.has(item.id);
           const payHref = p2pOnly
             ? `/cases/${item.id}#payment`
             : `/payments?caseId=${encodeURIComponent(item.id)}`;
+          let paymentCell;
+          if (isFree) {
+            paymentCell = (
+              <Link className="btn small primary" to={`/cases/${item.id}#report`}>
+                Free · View Case
+              </Link>
+            );
+          } else if (isPaid) {
+            paymentCell = (
+              <Link className="btn small primary" to={`/cases/${item.id}#report`}>
+                Paid · View Review
+              </Link>
+            );
+          } else {
+            paymentCell = (
+              <Link className="btn small" to={payHref}>
+                Pay
+              </Link>
+            );
+          }
           return (
             <tr key={item.id}>
               <td>
@@ -36,17 +58,7 @@ function CaseTable({ items, paidCaseIds }) {
               <td>
                 <StatusBadge status={item.status} />
               </td>
-              <td>
-                {isPaid ? (
-                  <Link className="btn small primary" to={`/cases/${item.id}#report`}>
-                    Paid · View Review
-                  </Link>
-                ) : (
-                  <Link className="btn small" to={payHref}>
-                    Pay
-                  </Link>
-                )}
-              </td>
+              <td>{paymentCell}</td>
             </tr>
           );
         })}

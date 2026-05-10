@@ -661,6 +661,53 @@ export async function listPaidCaseIds() {
   return ids;
 }
 
+// Subset of paid cases whose payment was the "first case free" promo so the
+// clinic dashboard can label those rows differently from real PayPal payments.
+export async function listFreeCaseIds() {
+  if (!useSupabaseStore) {
+    const ids = new Set();
+    inMemoryPayments.forEach((payment) => {
+      if (
+        payment.caseId
+        && payment.method === FIRST_FREE_METHOD
+        && isPaymentPaid(payment)
+      ) {
+        ids.add(payment.caseId);
+      }
+    });
+    return ids;
+  }
+  if (!supabaseUrl || !supabaseAnonKey) return new Set();
+  const accessToken = readStoredAccessToken();
+  if (!accessToken) return new Set();
+  try {
+    const endpoint =
+      `${supabaseUrl}/rest/v1/payment_transactions`
+      + `?select=case_id,status,method`
+      + `&method=eq.${toRestQueryValue(FIRST_FREE_METHOD)}`
+      + `&case_id=not.is.null`;
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json"
+      }
+    });
+    if (!response.ok) return new Set();
+    const rows = await response.json();
+    const ids = new Set();
+    if (Array.isArray(rows)) {
+      rows.forEach((row) => {
+        if (row?.case_id && isPaymentPaid(row)) ids.add(row.case_id);
+      });
+    }
+    return ids;
+  } catch (_error) {
+    return new Set();
+  }
+}
+
 export async function getPaymentForCase(caseId) {
   if (!caseId) return null;
   if (!useSupabaseStore) {

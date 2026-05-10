@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listClinicCases } from "../api/platformApi";
-import { listPaidCaseIds } from "../api/paymentsApi";
+import { listFreeCaseIds, listPaidCaseIds } from "../api/paymentsApi";
 import DashboardHeader from "../components/common/DashboardHeader";
 import { useAuth } from "../context/AuthContext";
 import { clinicMenu } from "../constants/menus";
@@ -11,6 +11,7 @@ function ClinicDashboard() {
   const { loading, user } = useAuth();
   const [data, setData] = useState([]);
   const [paidCaseIds, setPaidCaseIds] = useState(new Set());
+  const [freeCaseIds, setFreeCaseIds] = useState(new Set());
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -18,6 +19,7 @@ function ClinicDashboard() {
     if (!user) {
       setData([]);
       setPaidCaseIds(new Set());
+      setFreeCaseIds(new Set());
       setError("");
       return;
     }
@@ -45,11 +47,15 @@ function ClinicDashboard() {
         setError(lastError);
       }
 
-      try {
-        const ids = await listPaidCaseIds();
-        if (!cancelled) setPaidCaseIds(ids);
-      } catch (_paidError) {
-        if (!cancelled) setPaidCaseIds(new Set());
+      // Pull paid + free in parallel; failures fall back to empty sets so a
+      // single API hiccup never blocks the case table from rendering.
+      const [paidIds, freeIds] = await Promise.all([
+        listPaidCaseIds().catch(() => new Set()),
+        listFreeCaseIds().catch(() => new Set())
+      ]);
+      if (!cancelled) {
+        setPaidCaseIds(paidIds);
+        setFreeCaseIds(freeIds);
       }
     };
 
@@ -70,7 +76,7 @@ function ClinicDashboard() {
           </Link>
         </div>
         {error && <p className="auth-meta">{error}</p>}
-        <CaseTable items={data} paidCaseIds={paidCaseIds} />
+        <CaseTable items={data} paidCaseIds={paidCaseIds} freeCaseIds={freeCaseIds} />
       </section>
     </main>
   );

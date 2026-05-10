@@ -136,20 +136,28 @@ function P2pPaymentPanel({ caseItem, role, onPaymentChanged, refreshKey = 0 }) {
 
   return (
     <section className="card" id="payment">
-      <h3>PayPal Checkout</h3>
-      {firstCaseFreeApplied && (
-        <div className="warning-box" style={{ marginBottom: 12 }}>
-          First case free credit applied for this clinic. No payment is required for this case.
-        </div>
+      <h3>{firstCaseFreeApplied ? "First Case Free" : "PayPal Checkout"}</h3>
+      {firstCaseFreeApplied ? (
+        <>
+          <div className="warning-box" style={{ marginBottom: 12 }}>
+            First case free credit applied for this clinic. No payment is required for this case.
+          </div>
+          <p className="auth-meta">
+            Future cases will use PayPal Checkout. Reviewer payouts are handled separately per pilot terms.
+          </p>
+        </>
+      ) : (
+        <>
+          <p>
+            Pay securely with PayPal. After payment completes, your case report unlocks automatically—no transaction ID
+            or receipt upload is required.
+          </p>
+          <p className="auth-meta">
+            Settlement is processed to the VetBridge business account (vetbridgesupport@gmail.com). Reviewer payouts
+            are handled separately per pilot terms (approx. fee split is configured for settlement math).
+          </p>
+        </>
       )}
-      <p>
-        Pay securely with PayPal. After payment completes, your case report unlocks automatically—no transaction ID or
-        receipt upload is required.
-      </p>
-      <p className="auth-meta">
-        Settlement is processed to the VetBridge business account (vetbridgesupport@gmail.com). Reviewer payouts are
-        handled separately per pilot terms (approx. fee split is configured for settlement math).
-      </p>
 
       <div className="grid two">
         <div>
