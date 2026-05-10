@@ -42,6 +42,20 @@ async function getProfile(userId) {
   return data;
 }
 
+// Prefer the REST-based lookup so profile fetch never stalls on the supabase
+// JS client's auth lock (most visible right after a PayPal redirect). Falls
+// back to the JS client only if the REST path returns nothing.
+async function getProfileFast(userId) {
+  if (!userId) return null;
+  try {
+    const viaRest = await getUserProfileById(userId);
+    if (viaRest) return viaRest;
+  } catch (_restError) {
+    // ignore and fall through to JS client
+  }
+  return getProfile(userId);
+}
+
 async function upsertProfileFromUser(user) {
   if (!hasSupabaseConfig || !supabase || !user?.id) return null;
   const metadata = user.user_metadata || {};
@@ -90,31 +104,52 @@ function AuthProvider({ children }) {
     }
 
     let mounted = true;
+    // Profile + admin reconciliation runs in the background so it never
+    // blocks the initial render. Keeping the upsert/admin path here means
+    // legacy accounts still get repaired on next session, just without
+    // gating the page on those Supabase JS client calls.
+    const reconcileProfile = async (sessionUser) => {
+      if (!sessionUser?.id) return;
+      try {
+        let userProfile = await getProfileFast(sessionUser.id);
+        if (mounted && userProfile) setProfile(userProfile);
+        if (!userProfile) {
+          userProfile = await upsertProfileFromUser(sessionUser);
+          if (mounted && userProfile) setProfile(userProfile);
+        }
+        const adminAdjusted = await ensureAdminProfile(sessionUser, userProfile);
+        if (mounted && adminAdjusted) setProfile(adminAdjusted);
+      } catch (_error) {
+        // Background reconciliation failures should never break the UI.
+      }
+    };
+
+    // Hard guard: in case getSession itself stalls (rare, but observed
+    // after PayPal redirects), make sure the loading screen does not
+    // outlast 1.5s.
     const loadingGuard = setTimeout(() => {
       if (mounted) setLoading(false);
-    }, 4000);
+    }, 1500);
 
     supabase.auth
       .getSession()
-      .then(async ({ data }) => {
+      .then(({ data }) => {
         if (!mounted) return;
         let nextSession = data.session ?? null;
         const expectedEmail = readActiveAccountEmail();
         const sessionEmail = (nextSession?.user?.email || "").trim().toLowerCase();
         if (nextSession?.user && expectedEmail && sessionEmail && sessionEmail !== expectedEmail) {
-          await supabase.auth.signOut({ scope: "local" });
+          // Mismatch between pinned and current account: clear local session
+          // in the background; do not block the render on this either.
+          supabase.auth.signOut({ scope: "local" }).catch(() => {});
           nextSession = null;
         }
         setSession(nextSession);
         if (nextSession?.user?.id) {
-          // Bootstrap expected account only once for legacy sessions.
           if (!expectedEmail) writeActiveAccountEmail(nextSession.user.email);
-          let userProfile = await getProfile(nextSession.user.id);
-          if (!userProfile) userProfile = await upsertProfileFromUser(nextSession.user);
-          userProfile = await ensureAdminProfile(nextSession.user, userProfile);
-          if (mounted) setProfile(userProfile);
+          reconcileProfile(nextSession.user);
         } else {
-          if (mounted) setProfile(null);
+          setProfile(null);
         }
       })
       .catch(() => {
@@ -126,12 +161,12 @@ function AuthProvider({ children }) {
         if (mounted) setLoading(false);
       });
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       try {
         const expectedEmail = readActiveAccountEmail();
         const sessionEmail = (nextSession?.user?.email || "").trim().toLowerCase();
         if (nextSession?.user && expectedEmail && sessionEmail && sessionEmail !== expectedEmail) {
-          await supabase.auth.signOut({ scope: "local" });
+          supabase.auth.signOut({ scope: "local" }).catch(() => {});
           setSession(null);
           setProfile(null);
           return;
@@ -139,13 +174,10 @@ function AuthProvider({ children }) {
         setSession(nextSession ?? null);
         if (nextSession?.user?.id) {
           if (!expectedEmail) writeActiveAccountEmail(nextSession.user.email);
-          let userProfile = await getProfile(nextSession.user.id);
-          if (!userProfile) userProfile = await upsertProfileFromUser(nextSession.user);
-          userProfile = await ensureAdminProfile(nextSession.user, userProfile);
-          setProfile(userProfile);
-        } else setProfile(null);
-      } catch (_error) {
-        setSession(nextSession ?? null);
+          reconcileProfile(nextSession.user);
+        } else {
+          setProfile(null);
+        }
       } finally {
         setLoading(false);
       }
