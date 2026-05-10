@@ -73,18 +73,13 @@ function RoleSelectionPage() {
         setMessage("This email is not allowed for admin signup.");
         return;
       }
-      if (!form.paypalEmail.trim()) {
-        setMessage("PayPal email is required so reviewer payouts and clinic refunds can be routed correctly.");
-        return;
-      }
       await signUp({
         email: form.email,
         password: form.password,
         phone: form.phone.trim(),
         role: form.signupRole,
         fullName: form.fullName.trim(),
-        institution: form.institution.trim(),
-        paypalEmail: form.paypalEmail.trim()
+        institution: form.institution.trim()
       });
       setMessage("Account created. You can sign in now.");
     } catch (error) {
@@ -159,20 +154,6 @@ function RoleSelectionPage() {
                 <option value="reviewer">Reviewer</option>
                 {canSignupAdmin && <option value="admin">Admin</option>}
               </select>
-            </div>
-            <div>
-              <label>PayPal Email (required for signup)</label>
-              <input
-                name="paypalEmail"
-                type="email"
-                value={form.paypalEmail}
-                onChange={onChange}
-                placeholder="same as your account email"
-              />
-              <small style={{ display: "block", marginTop: 4 }}>
-                Tip: use the same email as your account login to avoid confusion. Reviewers receive
-                payouts here; clinics use it for refunds and receipts.
-              </small>
             </div>
             <div className="row full">
               <button className="btn primary" onClick={handleSignIn} disabled={loading}>
