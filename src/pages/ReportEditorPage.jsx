@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { notifyEvent } from "../api/notifications";
 import {
   downloadReportPDF,
   getCase,
@@ -11,6 +12,7 @@ import DashboardHeader from "../components/common/DashboardHeader";
 import Field from "../components/common/Field";
 import Info from "../components/common/Info";
 import StatusBadge from "../components/common/StatusBadge";
+import { useAuth } from "../context/AuthContext";
 import { reviewerMenu } from "../constants/menus";
 import { reportTemplate } from "../data/mockData";
 import { PRIOR_AI_LABELS, extractIntakeFromHistory } from "../lib/caseIntake";
@@ -22,6 +24,7 @@ function isImageFile(file) {
 function ReportEditorPage() {
   const { caseId } = useParams();
   const navigate = useNavigate();
+  const { user, profile } = useAuth();
   const [report, setReport] = useState(reportTemplate);
   const [caseItem, setCaseItem] = useState(null);
   const [files, setFiles] = useState([]);
@@ -71,6 +74,15 @@ function ReportEditorPage() {
     setMessage("");
     try {
       await submitReport(caseId, report);
+      // Ops alert. Only emit on first-time submission so report edits do not
+      // spam the inbox; further status changes are visible in the case page.
+      if (!hasExistingReport) {
+        notifyEvent("report_submitted", {
+          caseId,
+          reviewerEmail: profile?.email || user?.email || "",
+          reviewerName: profile?.full_name || ""
+        });
+      }
       setMessage(hasExistingReport ? "Report updated." : "Report submitted.");
       navigate(`/cases/${caseId}`);
     } catch (error) {

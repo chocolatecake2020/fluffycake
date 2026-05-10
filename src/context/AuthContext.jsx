@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { notifyEvent } from "../api/notifications";
 import { getUserProfileById, updateMyUserProfile } from "../api/platformApi";
 import { hasSupabaseConfig, supabase } from "../lib/supabaseClient";
 
@@ -271,6 +272,14 @@ function AuthProvider({ children }) {
         if (data?.user?.id && data.session?.user) {
           await upsertProfileFromUser(data.session.user);
         }
+        // Fire-and-forget ops alert. Sensitive fields (password, phone) are
+        // intentionally excluded from the notification payload.
+        notifyEvent("user_signup", {
+          email: normalizedEmail,
+          name: fullName,
+          role,
+          institution
+        });
         return data;
       },
       async updatePayoutEmail(paypalEmail) {

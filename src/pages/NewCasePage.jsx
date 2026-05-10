@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { notifyEvent } from "../api/notifications";
 import { createCase, getCase, updateCase, uploadCaseFiles } from "../api/platformApi";
 import { claimFirstFreeCase } from "../api/paymentsApi";
 import DashboardHeader from "../components/common/DashboardHeader";
@@ -237,6 +238,15 @@ function NewCasePage() {
         // and the case detail page also retries this on first load as a
         // safety net for legacy accounts.
         claimFirstFreeCase({ caseId: resolvedCaseId, clinicId }).catch(() => {});
+        // Ops alert. Excludes patient-identifying details by design; keep to
+        // case ID + workflow metadata so reviewers/staff can triage quickly.
+        notifyEvent("case_submitted", {
+          caseId: resolvedCaseId,
+          title: payload.title || "(untitled)",
+          reviewType: payload.reviewType || "(unset)",
+          priority: payload.priority || "(unset)",
+          clinicEmail: profile?.email || user?.email || ""
+        });
       }
       if (files.length) {
         await withTimeout(
