@@ -1,6 +1,33 @@
-import { hasSupabaseConfig, supabase } from "../lib/supabaseClient";
+import {
+  hasSupabaseConfig,
+  supabase,
+  supabaseAnonKey,
+  supabaseUrl
+} from "../lib/supabaseClient";
 
 const wait = (ms = 350) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Local helpers mirrored from platformApi.js so this hot path can talk to
+// PostgREST directly without going through the supabase JS client. After a
+// PayPal redirect the JS client occasionally hangs on its internal session
+// lock, which froze the case detail page on "Loading case...".
+const SUPABASE_AUTH_STORAGE_KEY = "vetbridge-auth-token";
+
+function readStoredAccessToken() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(SUPABASE_AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const blob = JSON.parse(raw);
+    return blob?.access_token || blob?.currentSession?.access_token || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function toRestQueryValue(value) {
+  return encodeURIComponent(String(value ?? ""));
+}
 
 const inMemoryPayments = new Map();
 const inMemoryPayouts = new Map();
@@ -644,14 +671,31 @@ export async function getPaymentForCase(caseId) {
     });
     return latest;
   }
-  const { data, error } = await supabase
-    .from("payment_transactions")
-    .select("*")
-    .eq("case_id", caseId)
-    .order("created_at", { ascending: false })
-    .limit(1);
-  if (error || !Array.isArray(data) || data.length === 0) return null;
-  return normalizePaymentRow(data[0]);
+  // Use PostgREST directly to avoid the supabase JS client occasionally
+  // stalling on its internal auth lock right after a PayPal return.
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  const accessToken = readStoredAccessToken();
+  if (!accessToken) return null;
+  try {
+    const endpoint =
+      `${supabaseUrl}/rest/v1/payment_transactions`
+      + `?select=*&case_id=eq.${toRestQueryValue(caseId)}`
+      + `&order=created_at.desc&limit=1`;
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json"
+      }
+    });
+    if (!response.ok) return null;
+    const rows = await response.json();
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    return normalizePaymentRow(rows[0]);
+  } catch (_error) {
+    return null;
+  }
 }
 
 function normalizePayoutRow(row) {

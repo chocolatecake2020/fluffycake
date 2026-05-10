@@ -49,7 +49,7 @@ function CaseDetailPage() {
         new Promise((resolve) => setTimeout(() => resolve(fallback), ms))
       ]);
 
-    const LOAD_TIMEOUT_MS = 8000;
+    const LOAD_TIMEOUT_MS = 4000;
 
     const load = async () => {
       setLoading(true);
