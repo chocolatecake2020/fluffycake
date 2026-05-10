@@ -19,6 +19,7 @@ import Info from "../components/common/Info";
 import StatusBadge from "../components/common/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import P2pPaymentPanel from "../features/payments/components/P2pPaymentPanel";
+import { PRIOR_AI_LABELS, extractIntakeFromHistory } from "../lib/caseIntake";
 
 function isImageFile(file) {
   return file.fileType?.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp)$/i.test(file.fileName || "");
@@ -259,6 +260,38 @@ function CaseDetailPage() {
           <Info label="Internal notes" value="Awaiting reviewer interpretation assistance." />
         </div>
       </section>
+      {(() => {
+        const intake = extractIntakeFromHistory(item.history);
+        const priorLabel = PRIOR_AI_LABELS[intake.priorAiSource] || PRIOR_AI_LABELS.none;
+        const dash = "-";
+        return (
+          <section className="card">
+            <h3>Submitted Case Details</h3>
+            <div className="grid two">
+              <Info label="Patient name" value={item.patientName || dash} />
+              <Info label="Species" value={item.species || dash} />
+              <Info label="Breed" value={item.breed || dash} />
+              <Info label="Age" value={item.age || dash} />
+              <Info label="Sex" value={item.sex || dash} />
+              <Info label="Weight" value={item.weight || dash} />
+              <Info label="Presenting complaint" value={item.complaint || dash} />
+              <Info label="Requested review type" value={item.reviewType || dash} />
+              <Info label="Priority" value={item.priority || dash} />
+              <Info label="Prior diagnostics / AI output" value={priorLabel} />
+              <Info
+                label="AI or prior impression notes"
+                value={intake.priorAiNotes || dash}
+              />
+              <Info
+                label="Primary question for reviewer"
+                value={intake.primaryQuestion || dash}
+              />
+              <Info label="Clinical history" value={intake.baseHistory || dash} />
+              <Info label="Current medication" value={item.medication || dash} />
+            </div>
+          </section>
+        );
+      })()}
       <section className="card">
         <h3>Uploaded Files</h3>
         {files.length === 0 ? (
