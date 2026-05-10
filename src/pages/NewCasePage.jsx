@@ -344,7 +344,7 @@ function NewCasePage() {
           <label>{isEditMode ? "Add additional files (optional)" : "Files upload"}</label>
           <input type="file" multiple onChange={onFilesChange} />
           <small>{uploadHintForReviewType(form.reviewType)}</small>
-          <small>Allowed: {ALLOWED_EXTENSIONS.join(", ")} / Max {MAX_FILE_SIZE_MB}MB each</small>
+          <small>You can select multiple files at once. Allowed: {ALLOWED_EXTENSIONS.join(", ")} / Max {MAX_FILE_SIZE_MB}MB each</small>
           {isEditMode && (
             <small>Existing files remain attached. Selecting new files appends them.</small>
           )}

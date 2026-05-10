@@ -295,14 +295,7 @@ function CaseDetailPage() {
       <section className="card">
         <h3>Uploaded Files</h3>
         {files.length === 0 ? (
-          <div className="image-grid">
-            {[1, 2, 3, 4].map((n) => (
-              <div className="image-placeholder" key={n}>
-                Imaging Preview {n}
-                <small>DICOM / JPG placeholder viewer</small>
-              </div>
-            ))}
-          </div>
+          <p className="auth-meta" style={{ margin: 0 }}>No files uploaded.</p>
         ) : (
           <div className="file-list">
             {files.map((file) => (
